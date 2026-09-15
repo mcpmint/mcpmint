@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(codex --version)",
+      "Bash(node \"/Users/vivekr_500340/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs\")",
+      "Bash(git checkout *)"
+    ]
+  }
+}
