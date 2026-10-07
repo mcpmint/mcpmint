@@ -459,7 +459,7 @@ test("openapi -> node preview matches golden contract", () => {
 
     const sbom = JSON.parse(getFileContent(preview, "mcpmint.sbom.json")) as { bomFormat: string; components: Array<{ name: string; version: string }> };
     assert.equal(sbom.bomFormat, "CycloneDX");
-    assert.ok(sbom.components.some((component) => component.name === "@modelcontextprotocol/sdk" && component.version === "1.29.0"));
+    assert.ok(sbom.components.some((component) => component.name === "@modelcontextprotocol/sdk" && component.version === "1.32.1"));
     const provenance = JSON.parse(getFileContent(preview, "mcpmint.provenance.json")) as { buildDefinition: { externalParameters: { operationIds: string[] } } };
     assert.deepEqual(provenance.buildDefinition.externalParameters.operationIds, ["POST-/customers"]);
 
@@ -470,7 +470,7 @@ test("openapi -> node preview matches golden contract", () => {
     const indexFile = getFileContent(preview, "src/index.ts");
     const readmeFile = getFileContent(preview, "README.md");
     const packageFile = getFileContent(preview, "package.json");
-    assert.match(packageFile, /"@modelcontextprotocol\/sdk": "1\.29\.0"/);
+    assert.match(packageFile, /"@modelcontextprotocol\/sdk": "1\.32\.1"/);
     // Modern MCP registration API (registerTool with a config object) plus method-derived
     // annotations. POST -> not read-only, not idempotent, not destructive.
     assert.match(serverFile, /server\.registerTool\(\s*"create_customer",\s*\{/);
@@ -495,7 +495,7 @@ test("openapi -> node preview matches golden contract", () => {
     assert.match(readmeFile, /## Upstream API Auth[\s\S]*`apiKey`: sends `x-api-key` via header from `API_KEY`/);
     assert.match(readmeFile, /## MCP Server Access[\s\S]*MCP server access auth protects the generated MCP endpoint itself/);
     assert.match(readmeFile, /## Known Warnings[\s\S]*- None\./);
-    assert.match(readmeFile, /## Tested Runtime Versions[\s\S]*`@modelcontextprotocol\/sdk`[\s\S]*`1\.29\.0`/);
+    assert.match(readmeFile, /## Tested Runtime Versions[\s\S]*`@modelcontextprotocol\/sdk`[\s\S]*`1\.32\.1`/);
     assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"url": "http:\/\/localhost:8080"/);
     assert.doesNotMatch(readmeFile, /## Example MCP Client Config[\s\S]*"env"/);
   });

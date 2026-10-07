@@ -1,6 +1,6 @@
 import type { ApiModel } from "@/lib/api-model";
 
-export const GENERATOR_VERSION = "2.2.0";
+export const GENERATOR_VERSION = "2.2.1";
 export const GENERATOR_CONTRACT_VERSION = 2;
 
 export type Transport = "stdio" | "sse" | "http";
