@@ -43,6 +43,8 @@
 
 Repository checks include TypeScript, ESLint, production Next build, generator/parser/API/workflow/CLI tests, production Chromium flows and axe checks. Full generated verification installs real pinned dependencies and checks Node regular/compact plus Python stdio/HTTP/compact. CI opts into generated Node audits with `MCPMINT_AUDIT_GENERATED=1`.
 
+CLI packaging is also checked in a clean repository copy with only `cli/node_modules` installed: `npm ci`, bundle build, dependency audit and the executable help command pass without root app dependencies. TypeScript is an explicit CLI build dependency; it must not be supplied accidentally by the app installation.
+
 Local container smoke checks exercised Node and Python HTTP initialization, tools/list, a real read-only tool call and invalid-argument rejection on overridden ports. Container builds used the environment's proxy CA as a build secret; generated Dockerfiles were otherwise unchanged. This validates packaging/connectivity, not an OS-image vulnerability assessment.
 
 The default sample ZIP is downloaded through the production browser UI, extracted, installed, built, tested and audited. Logs from this remediation are retained under `/workspace/mcpmint-review/remediation-evidence` when working in this review workspace. Repository test sources are portable; workspace logs are supporting evidence.
