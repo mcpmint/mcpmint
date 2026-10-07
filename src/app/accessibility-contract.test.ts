@@ -42,7 +42,7 @@ test("muted text meets WCAG AA contrast in dark and light themes", () => {
 
 test("endpoint rows and selection controls expose keyboard and accessible-name contracts", () => {
     const editor = read("editor/page.tsx");
-    assert.match(editor, /role="button"/);
+    assert.doesNotMatch(editor, /role="button"/);
     assert.match(editor, /aria-expanded=\{isExpanded\}/);
     assert.match(editor, /aria-label=\{`Include \$\{ep\.method\} \$\{ep\.path\}`\}/);
 });
@@ -65,7 +65,7 @@ test("homepage content and transformation proof do not depend on hydration to be
 test("mobile export uses native progressive disclosure for advanced evidence", () => {
     const exportPage = read("export/page.tsx");
     assert.match(exportPage, /function ResponsiveDisclosure/);
-    assert.match(exportPage, /<details className="progressive-section/);
+    assert.match(exportPage, /<details open className="progressive-section/);
     assert.match(exportPage, /focus-visible:outline-2/);
 });
 

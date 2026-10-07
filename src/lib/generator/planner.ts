@@ -1,3 +1,4 @@
+import { schemaReviewNotes } from "./schema.ts";
 import type {
     ApiHttpMethod,
     ApiMediaType,
@@ -434,6 +435,7 @@ export function planToolFromOperation(
 
     pushRequestBodyReviewFlags(requestBodyStrategy, manualReview);
 
+    warnings.push(...schemaReviewNotes({ parameters: operation.parameters, requestBody: operation.requestBody, responses: operation.responses }));
     const title = getToolTitle(operation);
 
     return {
@@ -441,6 +443,9 @@ export function planToolFromOperation(
         operationId: operation.operationId,
         method: operation.method,
         path: operation.path,
+        baseUrl: (operation.servers?.[0] || operation.pathServers?.[0] || apiModel.servers[0])?.resolvedUrl
+            || (operation.servers?.[0] || operation.pathServers?.[0] || apiModel.servers[0])?.url
+            || apiModel.baseUrls[0],
         toolName,
         title,
         inputSchema: buildInputSchema(parameters),

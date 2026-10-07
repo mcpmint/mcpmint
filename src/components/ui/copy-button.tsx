@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 
 interface CopyButtonProps extends React.HTMLAttributes<HTMLButtonElement> {
     value: string;
+    onCopied?: () => void;
     variant?: "default" | "ghost" | "outline";
     size?: "default" | "sm" | "lg" | "icon";
 }
 
 export function CopyButton({
     value,
+    onCopied,
     className,
     variant = "ghost",
     size = "icon",
@@ -24,6 +26,7 @@ export function CopyButton({
         try {
             await navigator.clipboard.writeText(value);
             setCopied(true);
+            onCopied?.();
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
             console.error("Failed to copy:", err);

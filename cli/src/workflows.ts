@@ -1,25 +1,12 @@
 import type { GeneratorRequest } from "../../src/lib/generator/types.ts";
 import { buildGenerationPlan } from "../../src/lib/generator/normalize.ts";
-import { createScanAttestation, scanTools, type ScanReport, type ScanTool } from "../../src/lib/scanner/index.ts";
+import { createScanAttestation, scanTools, type ScanReport } from "../../src/lib/scanner/index.ts";
 import { createMockMcpResponse, executeInspectedRequest, inspectToolRequest, sampleArguments } from "../../src/lib/sandbox/request.ts";
 
-function requestScanTools(request: GeneratorRequest): ScanTool[] {
-    return buildGenerationPlan(request).tools.map((tool) => ({
-        name: tool.functionName,
-        description: tool.description,
-        method: tool.method,
-        path: tool.path,
-        annotations: tool.annotations,
-        inputSchema: {
-            type: "object",
-            properties: Object.fromEntries(tool.params.map((parameter) => [parameter.argName, { ...(parameter.schema || { type: parameter.type }), description: parameter.description || undefined }])),
-            required: tool.params.filter((parameter) => parameter.required).map((parameter) => parameter.argName),
-        },
-    }));
-}
+import { generationPlanToScanTools } from "../../src/lib/scanner/from-plan.ts";
 
 export function scanRequest(request: GeneratorRequest): { report: ScanReport; subject: string } {
-    const tools = requestScanTools(request);
+    const tools = generationPlanToScanTools(buildGenerationPlan(request));
     return { report: scanTools(tools), subject: JSON.stringify(tools) };
 }
 
@@ -54,9 +41,9 @@ export async function testRequest(input: {
     if (input.live && tool.method !== "GET" && !input.allowMutation) {
         throw new Error(`live ${tool.method} requires --allow-mutation`);
     }
-    const inspected = inspectToolRequest(tool, plan.spec.baseUrl, input.args || sampleArguments(tool));
+    const inspected = inspectToolRequest(tool, tool.baseUrl || plan.spec.baseUrl, input.args || sampleArguments(tool));
     const response = input.live
-        ? await executeInspectedRequest(inspected, plan.spec.baseUrl)
+        ? await executeInspectedRequest(inspected, tool.baseUrl || plan.spec.baseUrl)
         : createMockMcpResponse(200, { ok: true, operationId: tool.id, mode: "mock" });
     return { request: inspected, response };
 }

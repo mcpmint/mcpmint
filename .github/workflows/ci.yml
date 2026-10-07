@@ -55,6 +55,15 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: phc_ci_public_fixture
+          NEXT_PUBLIC_POSTHOG_HOST: https://us.i.posthog.com
+
+      - name: Install Chromium for browser checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Production browser and accessibility checks
+        run: npm run test:browser
 
   cli-build:
     name: CLI build
@@ -108,3 +117,5 @@ jobs:
 
       - name: Full generated Node and Python verification
         run: npm run test:generated:full
+        env:
+          MCPMINT_AUDIT_GENERATED: "1"

@@ -28,8 +28,10 @@ export function ThemeProvider({
             return defaultTheme;
         }
 
-        const stored = localStorage.getItem(storageKey) as Theme | null;
-        return stored || defaultTheme;
+        try {
+            const stored = localStorage.getItem(storageKey);
+            return stored === "dark" || stored === "light" || stored === "system" ? stored : defaultTheme;
+        } catch { return defaultTheme; }
     });
 
     useEffect(() => {
@@ -50,7 +52,7 @@ export function ThemeProvider({
     const value = {
         theme,
         setTheme: (newTheme: Theme) => {
-            localStorage.setItem(storageKey, newTheme);
+            try { localStorage.setItem(storageKey, newTheme); } catch { /* Apply the theme even if browser storage is unavailable. */ }
             setTheme(newTheme);
         },
     };

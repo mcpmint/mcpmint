@@ -1,6 +1,6 @@
 import type { ApiModel } from "@/lib/api-model";
 
-export const GENERATOR_VERSION = "2.1.0";
+export const GENERATOR_VERSION = "2.2.1";
 export const GENERATOR_CONTRACT_VERSION = 2;
 
 export type Transport = "stdio" | "sse" | "http";
@@ -177,6 +177,7 @@ export interface ToolPlan {
     operationId?: string;
     method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD" | "TRACE";
     path: string;
+    baseUrl?: string;
     toolName: string;
     title?: string;
     inputSchema: Record<string, unknown>;
@@ -304,6 +305,7 @@ export interface GenerationTool {
     description: string;
     method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
     path: string;
+    baseUrl?: string;
     params: GenerationParam[];
     authStrategy: ToolAuthPlan;
     requestBody?: GenerationRequestBody;

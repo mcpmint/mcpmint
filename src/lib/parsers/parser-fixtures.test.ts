@@ -314,3 +314,13 @@ test("validation distinguishes unknown auth schemes from ambiguous auth", async 
         warning.message.includes("auth schemes that were not found")
     ), false);
 });
+
+test("recursive schemas receive a recoverable unsupported-feature message", async () => {
+    const content = await readFile(join(fixturesDir, "recursive.openapi.json"), "utf8");
+    await assert.rejects(() => parseOpenAPIFromContent(content, "recursive.openapi.json"), /Recursive schema references are not supported/);
+});
+
+test("external references are rejected before parser network access", async () => {
+    const content = JSON.stringify({ openapi: "3.1.0", info: { title: "External", version: "1" }, paths: { "/ping": { get: { responses: { "200": { description: "OK", content: { "application/json": { schema: { $ref: "https://unreachable.example/private.json" } } } } } } } } });
+    await assert.rejects(() => parseOpenAPIFromContent(content, "external.json"), /External schema references are not fetched/);
+});

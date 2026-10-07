@@ -297,6 +297,17 @@ function addRawQueryParameters(rawUrl: string, queryParameters: Map<string, ApiP
     }
 }
 
+function requestOrigin(url: PostmanUrl | string, variables: Record<string, string>): string | undefined {
+    const urlVariables = typeof url === "string" ? variables : { ...variables, ...variablesToRecord(url.variable) };
+    const raw = typeof url === "string" ? url : url.raw || (url.host?.length ? `${url.protocol || "https"}://${url.host.join(".")}` : "");
+    try {
+        const parsed = new URL(replaceVariables(raw, urlVariables) || raw);
+        return ["http:", "https:"].includes(parsed.protocol) ? parsed.origin : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function parseUrl(url: PostmanUrl | string, variables: Record<string, string>): { path: string; parameters: ApiParameter[] } {
     const queryParameters = new Map<string, ApiParameter>();
     let path = "/";
@@ -558,6 +569,7 @@ export function buildPostmanApiModel(
         mergeSecuritySchemes(securitySchemes, operationAuth.schemes);
 
         const url = parseUrl(item.request.url, variables);
+        const origin = requestOrigin(item.request.url, variables);
         const headerParameters: ApiParameter[] = (item.request.header || [])
             .filter((header) => !header.disabled && !shouldExcludeGeneratedAuthHeader(header, effectiveAuth))
             .map((header) => ({
@@ -575,6 +587,7 @@ export function buildPostmanApiModel(
             id: `${method}::${url.path}::${id++}`,
             method: method as ApiOperation["method"],
             path: url.path,
+            servers: origin ? [{ url: origin }] : undefined,
             operationId: operationId(method, url.path, item.name),
             summary: item.name,
             description: item.description || item.request.description,

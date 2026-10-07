@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! Problems with *generated output* are the most valuable bugs we get — they usually point at a gap in the generator. The more of your spec and config you can share, the faster we can reproduce it.
+        Thanks for reporting! Problems with *generated output* are the most valuable bugs we get — they usually point at a gap in the generator. Share a minimal, sanitized reproduction. Never attach private specs, credentials, customer data, or tokens.
   - type: textarea
     id: what-happened
     attributes:

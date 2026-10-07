@@ -223,6 +223,7 @@ function toGenerationToolFromToolPlan(
         description: toolPlan.description,
         method: toolPlan.method as GenerationTool["method"],
         path: toolPlan.path,
+        baseUrl: toolPlan.baseUrl,
         params,
         authStrategy: mergeFallbackAuthPlan(toolPlan.authStrategy, fallbackAuth),
         requestBody,
@@ -299,6 +300,7 @@ export function buildGenerationPlan(request: GeneratorRequest): GenerationPlan {
 
         return {
             ...normalized,
+            baseUrl: normalized.baseUrl || request.spec.baseUrl,
             displayName: uniqueDisplayName,
             functionName: uniqueFunctionName,
         };

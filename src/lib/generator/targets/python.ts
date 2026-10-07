@@ -124,7 +124,7 @@ function renderPythonRequestBody(requestBody?: GenerationRequestBody): {
             return {
                 setup: "",
                 headerLines: [`    request_headers["Content-Type"] = ${JSON.stringify(requestBody.contentType)}`],
-                requestArgs: [`content=${getPythonBodyExpression(requestBody)}`],
+                requestArgs: [`content=base64.b64decode(str(${getPythonBodyExpression(requestBody)}), validate=True)`],
             };
     }
 }
@@ -146,6 +146,22 @@ function getPythonSignatureParams(tool: GenerationTool): GenerationTool["params"
     return [...tool.params].sort((left, right) => Number(right.required) - Number(left.required));
 }
 
+function pythonParamType(param: GenerationTool["params"][number]): string {
+    const types = Array.isArray(param.schema?.type) ? param.schema.type : [param.type];
+    const result = types.map((type) => type === "null" ? "None" : toPythonType(String(type)));
+    if ((param.schema?.nullable || !param.required) && !result.includes("None")) result.push("None");
+    return [...new Set(result)].join(" | ");
+}
+
+function pythonInputSchema(tool: GenerationTool): Record<string, unknown> {
+    return {
+        type: "object",
+        properties: Object.fromEntries(tool.params.map((p) => [p.argName, { ...(p.schema || { type: p.type }), description: p.description }])),
+        required: tool.params.filter((p) => p.required).map((p) => p.argName),
+        additionalProperties: false,
+    };
+}
+
 function renderPythonOperation(tool: GenerationTool): string {
     const pathParams = tool.params.filter((param) => param.location === "path");
     const queryParams = tool.params.filter((param) => param.location === "query");
@@ -154,7 +170,7 @@ function renderPythonOperation(tool: GenerationTool): string {
     const bodyRender = renderPythonRequestBody(tool.requestBody);
 
     const signature = getPythonSignatureParams(tool)
-        .map((param) => `${param.argName}: ${toPythonType(param.type)}${param.required ? "" : " | None = None"}`)
+        .map((param) => `${param.argName}: ${pythonParamType(param)}${param.required ? "" : " = None"}`)
         .join(", ");
 
     const pathReplacements = pathParams
@@ -176,6 +192,7 @@ function renderPythonOperation(tool: GenerationTool): string {
     const requestArgs = [
         `method=${JSON.stringify(tool.method)}`,
         "path=path",
+        `base_url=${JSON.stringify(tool.baseUrl || "")}`,
         "headers=request_headers",
         "params=params",
         "cookies=cookies",
@@ -183,6 +200,7 @@ function renderPythonOperation(tool: GenerationTool): string {
     ];
 
     return `def ${tool.functionName}_operation(${signature}) -> dict:
+    validate_arguments(${toPythonJsonLiteral(pythonInputSchema(tool))}, {${tool.params.map((p) => `${JSON.stringify(p.argName)}: ${p.argName}`).join(", ")}})
     path = ${JSON.stringify(tool.path)}
 ${pathReplacements ? `${pathReplacements}\n` : ""}    params: list[tuple[str, str]] = []
 ${queryLines ? `${queryLines}\n` : ""}    request_headers: dict[str, str] = {}
@@ -269,7 +287,7 @@ function renderPythonAnnotations(annotations?: GenerationTool["annotations"]): s
 
 function renderPythonServerTool(tool: GenerationTool): string {
     const signature = getPythonSignatureParams(tool)
-        .map((param) => `${param.argName}: ${toPythonType(param.type)}${param.required ? "" : " | None = None"}`)
+        .map((param) => `${param.argName}: ${pythonParamType(param)}${param.required ? "" : " = None"}`)
         .join(", ");
     const args = getPythonSignatureParams(tool).map((param) => param.argName).join(", ");
 
@@ -286,10 +304,13 @@ function renderPythonServerTool(tool: GenerationTool): string {
         ? `{"result": ${tool.functionName}_operation(${args})}`
         : `${tool.functionName}_operation(${args})`;
 
-    return `@mcp.tool(${decoratorArgs.join(", ")})
-def ${tool.functionName}(${signature}) -> dict:
+    return `def ${tool.functionName}(${signature}) -> dict:
     ${toPythonStringLiteral(tool.description)}
     return ${returnExpression}
+
+${tool.functionName}_tool = FunctionTool.from_function(${tool.functionName}, ${decoratorArgs.join(", ")})
+${tool.functionName}_tool.parameters = normalized_schema(${toPythonJsonLiteral(pythonInputSchema(tool))})
+mcp.add_tool(${tool.functionName}_tool)
 `;
 }
 
@@ -695,6 +716,8 @@ import logging
 import sys
 
 from fastmcp import FastMCP
+from fastmcp.tools import FunctionTool
+from validation import normalized_schema
 from mcp.types import ToolAnnotations
 from config import MCP_SERVER_CONFIG
 from operations import (
@@ -856,8 +879,9 @@ function renderConfig(plan: GenerationPlan): string {
 
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 def parse_mcp_allowed_origins(value: str | None, fallback: list[str]) -> list[str]:
     if value is None or not value.strip():
@@ -865,7 +889,7 @@ def parse_mcp_allowed_origins(value: str | None, fallback: list[str]) -> list[st
     return [origin.strip() for origin in value.split(",") if origin.strip()]
 
 
-API_BASE_URL = os.getenv("API_BASE_URL", ${JSON.stringify(plan.spec.baseUrl || "https://api.example.com")})
+API_BASE_URL = os.getenv("API_BASE_URL", "")
 AUTH_SCHEMES = {
 ${authSchemeEntries}
 }
@@ -873,8 +897,8 @@ ${authSchemeEntries}
 MCP_SERVER_CONFIG = {
     "name": ${JSON.stringify(plan.server.name)},
     "version": ${JSON.stringify(plan.server.version)},
-    "host": ${JSON.stringify(plan.server.host)},
-    "port": ${plan.server.port},
+    "host": os.getenv("MCP_HOST", ${JSON.stringify(plan.server.host)}),
+    "port": int(os.getenv("PORT", ${JSON.stringify(String(plan.server.port))})),
 }
 
 MCP_SERVER_ACCESS_CONFIG = {
@@ -954,20 +978,28 @@ def request_api(
     *,
     method: str,
     path: str,
+    base_url: str = "",
     headers: dict[str, str],
     params: list[tuple[str, str]],
     cookies: dict[str, str],
     **kwargs: object,
 ) -> httpx.Response:
     request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-    return client.request(
-        method=method,
-        url=f"{API_BASE_URL}{path}",
-        headers=headers,
-        params=params,
-        cookies=cookies,
-        **request_kwargs,
-    )
+    url = f"{(API_BASE_URL or base_url or 'https://api.example.com').rstrip('/')}{path}"
+    with client.stream(method=method, url=url, headers=headers, params=params, cookies=cookies,
+                       follow_redirects=False, **request_kwargs) as response:
+        if 300 <= response.status_code < 400:
+            raise ToolError("Upstream redirect rejected. Configure the final API base URL explicitly.")
+        if response.status_code >= 400:
+            raise ToolError(f"Upstream returned HTTP {response.status_code}.")
+        chunks = []
+        size = 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > 1_048_576:
+                raise ToolError("Upstream response exceeded the 1 MiB limit.")
+            chunks.append(chunk)
+        return httpx.Response(response.status_code, headers=response.headers, content=b"".join(chunks))
 
 
 def response_to_tool_result(response: httpx.Response) -> dict:
@@ -975,7 +1007,7 @@ def response_to_tool_result(response: httpx.Response) -> dict:
     # tool result the model can self-correct on, rather than a raw traceback that
     # would fail the tool call opaquely.
     if response.status_code >= 400:
-        raise ToolError(f"HTTP {response.status_code}: {response.text}")
+        raise ToolError(f"Upstream returned HTTP {response.status_code}.")
     if "application/json" in response.headers.get("content-type", ""):
         return response.json()
     return {"text": response.text}
@@ -1110,13 +1142,14 @@ def append_serialized_parameter(params: list[tuple[str, str]], name: str, value:
 
 function renderOperations(plan: GenerationPlan): string {
     const needsBase64 = plan.tools.some((tool) =>
-        tool.requestBody?.contentKind === "multipart" &&
-        tool.requestBody.params.some(isMultipartBinaryParam)
+        (tool.requestBody?.contentKind === "binary") || (tool.requestBody?.contentKind === "multipart" &&
+        tool.requestBody.params.some(isMultipartBinaryParam))
     );
 
     return `from __future__ import annotations
 
 ${needsBase64 ? "import base64\n" : ""}from api_client import apply_auth, request_api, response_to_tool_result
+from validation import validate_arguments
 from config import AUTH_SCHEMES
 from serialization import (
     append_serialized_parameter,
@@ -1144,7 +1177,7 @@ function renderDockerfile(plan: GenerationPlan): string {
     // Two-stage build: install into a virtualenv in the build stage, then ship a lean
     // non-root runtime that only carries the venv and sources. Same run modes as Node:
     //   stdio: docker run -i --rm IMAGE
-    //   HTTP:  docker run -p ${plan.server.port}:${plan.server.port} -e MCP_TRANSPORT=http IMAGE
+    //   HTTP: select HTTP when generating, then publish the configured port.
     return `# ---- Build stage ----
 FROM python:3.11.13-slim-bookworm AS build
 WORKDIR /app
@@ -1159,7 +1192,7 @@ RUN pip install --no-cache-dir .
 # ---- Runtime stage ----
 FROM python:3.11.13-slim-bookworm AS runtime
 WORKDIR /app
-ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 MCP_TRANSPORT=${plan.runtime.transport} PORT=${plan.server.port}
+ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 MCP_HOST=0.0.0.0 PORT=${plan.server.port}
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 COPY --from=build --chown=app:app /opt/venv /opt/venv
 COPY --from=build --chown=app:app /app /app
@@ -1305,7 +1338,7 @@ function renderPythonOperationBehaviorTest(tool: GenerationTool): string {
         assertions.push(`    assert call["content"] == ${JSON.stringify(scalarToExpectedString(args[requestBody.params[0]?.argName || "body"]))}`);
     } else if (requestBody?.contentKind === "binary") {
         assertions.push(`    assert call["headers"]["Content-Type"] == ${JSON.stringify(requestBody.contentType)}`);
-        assertions.push(`    assert call["content"] == args[${JSON.stringify(requestBody.params[0]?.argName || "body")}]`);
+        assertions.push(`    assert call["content"] == base64.b64decode(args[${JSON.stringify(requestBody.params[0]?.argName || "body")}])`);
     }
 
     return `def test_${tool.functionName}_operation_builds_api_request(monkeypatch) -> None:
@@ -1323,6 +1356,7 @@ ${assertions.join("\n")}`;
 function renderPythonTest(plan: GenerationPlan): string {
     return `from __future__ import annotations
 
+import base64
 import importlib
 import sys
 from pathlib import Path
@@ -1343,6 +1377,15 @@ class FakeResponse:
         self.headers = {"content-type": "application/json"}
         self._json_body = {"ok": True} if json_body is None else json_body
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_bytes(self):
+        yield self.text.encode("utf-8")
+
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}: {self.text}")
@@ -1356,7 +1399,7 @@ class FakeClient:
         self.calls: list[dict[str, object]] = []
         self.response = response or FakeResponse()
 
-    def request(self, **kwargs: object) -> FakeResponse:
+    def stream(self, **kwargs: object) -> FakeResponse:
         self.calls.append(kwargs)
         return self.response
 
@@ -1397,8 +1440,21 @@ def test_request_api_constructs_urls_and_reports_http_errors(monkeypatch) -> Non
 
     # Upstream failures are surfaced as ToolError (an isError tool result) so the
     # model can self-correct rather than the tool call failing opaquely.
-    with pytest.raises(ToolError, match="HTTP 418: teapot"):
+    with pytest.raises(ToolError, match="HTTP 418"):
         api_client.response_to_tool_result(FakeResponse(status_code=418, text="teapot"))
+
+
+def test_upstream_reads_are_bounded_and_errors_redacted(monkeypatch) -> None:
+    api_client, _operations, _serialization = load_modules(monkeypatch)
+    fake_client = FakeClient(FakeResponse(text="x" * 1_048_577))
+    monkeypatch.setattr(api_client, "client", fake_client)
+    kwargs = dict(method="GET", path="/large", headers={}, params=[], cookies={})
+    with pytest.raises(ToolError, match="1 MiB limit"):
+        api_client.request_api(**kwargs)
+    assert fake_client.calls[-1]["follow_redirects"] is False
+    fake_client.response = FakeResponse(status_code=500, text="private upstream diagnostic")
+    with pytest.raises(ToolError, match=r"^Upstream returned HTTP 500\.$"):
+        api_client.request_api(**kwargs)
 
 
 def test_serialization_helpers_encode_paths_and_queries(monkeypatch) -> None:
@@ -1466,6 +1522,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastmcp==${FASTMCP_VERSION}",
     "httpx==0.28.1",
+    "jsonschema==4.26.0",
     "python-dotenv==1.1.0",${pythonNeedsHttpServer(plan) ? `
     "uvicorn==0.35.0",
     "starlette==1.0.1",` : ""}
@@ -1492,6 +1549,38 @@ name = ${JSON.stringify(`io.github.OWNER/${sanitizeServerId(plan.server.name)}`)
     files.set(".env.example", getEnvExample(plan));
     files.set("src/server.py", renderServer(plan));
     files.set("src/config.py", renderConfig(plan));
+    files.set("src/validation.py", `from __future__ import annotations
+from fastmcp.exceptions import ToolError
+
+
+def normalized_schema(value):
+    if isinstance(value, list):
+        return [normalized_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: normalized_schema(child) for key, child in value.items() if key != "nullable"}
+    if result.get("type") == "file":
+        result["type"] = "string"
+    if value.get("nullable") and "type" in result:
+        types = result["type"] if isinstance(result["type"], list) else [result["type"]]
+        result["type"] = list(dict.fromkeys(types + ["null"]))
+    for keyword, bound in [("exclusiveMinimum", "minimum"), ("exclusiveMaximum", "maximum")]:
+        if isinstance(result.get(keyword), bool):
+            exclusive = result.pop(keyword)
+            if exclusive and bound in result:
+                result[keyword] = result.pop(bound)
+    return result
+
+
+def validate_arguments(schema, arguments):
+    from jsonschema import Draft202012Validator, FormatChecker
+    required = set(schema.get("required", []))
+    supplied = {key: value for key, value in arguments.items() if value is not None or key in required}
+    error = next(Draft202012Validator(normalized_schema(schema), format_checker=FormatChecker()).iter_errors(supplied), None)
+    if error is not None:
+        path = ".".join(str(part) for part in error.absolute_path) or "arguments"
+        raise ToolError(f"Invalid {path}: {error.message}")
+`);
     files.set("src/api_client.py", renderApiClient());
     files.set("src/operations.py", renderOperations(plan));
     files.set("src/serialization.py", renderSerialization());

@@ -1,10 +1,13 @@
-import type { GenerationParam, GenerationTool } from "@/lib/generator/types";
+import { expectedPathParameter, expectedSerializedParameterValue, getExpectedQueryEntries } from "../generator/targets/shared.ts";
+import type { GenerationTool } from "@/lib/generator/types";
 
 export interface InspectedHttpRequest {
     method: string;
     url: string;
     headers: Record<string, string>;
     body?: string;
+    bodyKind?: "binary" | "multipart";
+    multipart?: Array<{ name: string; value: string; binary: boolean }>;
 }
 
 export interface McpSandboxResponse {
@@ -27,44 +30,6 @@ function scalar(value: unknown): string {
     return String(value);
 }
 
-function simpleValue(value: unknown, explode = false): string {
-    if (Array.isArray(value)) return value.map(scalar).join(",");
-    if (typeof value === "object" && value !== null) {
-        return Object.entries(value)
-            .flatMap(([key, item]) => explode ? [`${key}=${scalar(item)}`] : [key, scalar(item)])
-            .join(",");
-    }
-    return scalar(value);
-}
-
-function pathValue(parameter: GenerationParam, value: unknown): string {
-    const style = parameter.style || "simple";
-    const serialized = simpleValue(value, parameter.explode);
-    if (style === "label") return `.${serialized}`;
-    if (style === "matrix") {
-        if (parameter.explode && typeof value === "object" && value !== null) {
-            return `;${Object.entries(value).map(([key, item]) => `${encodeURIComponent(key)}=${encodeURIComponent(scalar(item))}`).join(";")}`;
-        }
-        return `;${encodeURIComponent(parameter.sourceName)}=${serialized}`;
-    }
-    return serialized;
-}
-
-function appendQuery(query: URLSearchParams, parameter: GenerationParam, value: unknown): void {
-    const style = parameter.style || "form";
-    if (style === "deepObject" && typeof value === "object" && value !== null && !Array.isArray(value)) {
-        for (const [key, item] of Object.entries(value)) query.append(`${parameter.sourceName}[${key}]`, scalar(item));
-        return;
-    }
-    if (Array.isArray(value) && style === "form" && parameter.explode !== false) {
-        for (const item of value) query.append(parameter.sourceName, scalar(item));
-        return;
-    }
-    const delimiter = style === "spaceDelimited" ? " " : style === "pipeDelimited" ? "|" : ",";
-    if (Array.isArray(value)) query.append(parameter.sourceName, value.map(scalar).join(delimiter));
-    else query.append(parameter.sourceName, simpleValue(value, parameter.explode));
-}
-
 function requiredArguments(tool: GenerationTool, args: Record<string, unknown>): void {
     const missing = tool.params
         .filter((parameter) => parameter.required && args[parameter.argName] === undefined)
@@ -84,39 +49,49 @@ export function inspectToolRequest(tool: GenerationTool, baseUrl: string, input:
         const value = args[parameter.argName];
         if (value === undefined) continue;
         if (parameter.location === "path") {
-            path = path.replace(`{${parameter.sourceName}}`, encodeURIComponent(pathValue(parameter, value)));
+            path = path.replace(`{${parameter.sourceName}}`, expectedPathParameter(parameter.sourceName, value, parameter));
         } else if (parameter.location === "query") {
-            appendQuery(query, parameter, value);
+            // Canonical query serialization is applied once below.
         } else if (parameter.location === "header") {
-            headers[parameter.sourceName] = simpleValue(value, parameter.explode);
+            headers[parameter.sourceName] = expectedSerializedParameterValue(parameter.sourceName, value, { ...parameter, location: parameter.location });
         } else if (parameter.location === "cookie") {
-            cookies.push(`${encodeURIComponent(parameter.sourceName)}=${encodeURIComponent(simpleValue(value, parameter.explode))}`);
+            cookies.push(`${encodeURIComponent(parameter.sourceName)}=${encodeURIComponent(expectedSerializedParameterValue(parameter.sourceName, value, { ...parameter, location: parameter.location }))}`);
         }
     }
 
+    for (const [name, value] of getExpectedQueryEntries(tool, args)) query.append(name, value);
     if (/\{[^}]+\}/.test(path)) throw new Error(`Unresolved path parameter in ${path}`);
     if (cookies.length > 0) headers.Cookie = cookies.join("; ");
-    const normalizedBase = baseUrl.replace(/\/$/, "");
+    const normalizedBase = (tool.baseUrl || baseUrl).replace(/\/$/, "");
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const url = `${normalizedBase}${normalizedPath}${query.size > 0 ? `?${query.toString()}` : ""}`;
 
     const bodyParameters = tool.params.filter((parameter) => parameter.location === "body" && args[parameter.argName] !== undefined);
     let body: string | undefined;
+    let bodyKind: InspectedHttpRequest["bodyKind"];
+    let multipart: InspectedHttpRequest["multipart"];
     if (tool.requestBody && bodyParameters.length > 0) {
         const bodyValues = Object.fromEntries(bodyParameters.map((parameter) => [parameter.sourceName, args[parameter.argName]]));
-        const onlyBody = bodyParameters.length === 1 && bodyParameters[0].argName === "body";
-        const bodyValue = onlyBody ? args.body : bodyValues;
-        if (tool.requestBody.contentKind === "formUrlencoded") {
+        const onlyBody = ["rawJsonObject", "rawArray", "text", "binary"].includes(tool.requestBody.contentKind);
+        const bodyValue = onlyBody ? args[bodyParameters[0].argName] : bodyValues;
+        if (tool.requestBody.contentKind === "binary") {
+            body = String(bodyValue);
+            bodyKind = "binary";
+        } else if (tool.requestBody.contentKind === "multipart") {
+            bodyKind = "multipart";
+            multipart = bodyParameters.map((p) => ({ name: p.sourceName, value: String(args[p.argName]), binary: p.schema?.format === "binary" || p.schema?.type === "file" }));
+            body = "Multipart fields are shown below; the HTTP client creates the boundary. Binary values are base64-encoded.";
+        } else if (tool.requestBody.contentKind === "formUrlencoded") {
             body = new URLSearchParams(Object.entries(bodyValues).map(([key, value]) => [key, scalar(value)])).toString();
         } else if (tool.requestBody.contentKind === "text") {
             body = scalar(bodyValue);
         } else {
             body = JSON.stringify(bodyValue, null, 2);
         }
-        headers["Content-Type"] = tool.requestBody.contentType;
+        if (bodyKind !== "multipart") headers["Content-Type"] = tool.requestBody.contentType;
     }
 
-    return { method: tool.method, url, headers, body };
+    return { method: tool.method, url, headers, body, ...(bodyKind ? { bodyKind } : {}), ...(multipart ? { multipart } : {}) };
 }
 
 function exampleForSchema(schema: Record<string, unknown> | undefined): unknown {
@@ -130,6 +105,7 @@ function exampleForSchema(schema: Record<string, unknown> | undefined): unknown 
     if (schema.type === "object" || schema.properties) {
         return Object.fromEntries(Object.entries(asObject(schema.properties)).map(([key, value]) => [key, exampleForSchema(asObject(value))]));
     }
+    if (schema.format === "binary") return "ZmlsZSBjb250ZW50";
     if (schema.format === "email") return "user@example.com";
     if (schema.format === "uuid") return "550e8400-e29b-41d4-a716-446655440000";
     if (schema.format === "date") return "2026-07-20";
@@ -157,6 +133,17 @@ export async function executeInspectedRequest(request: InspectedHttpRequest, exp
     if (url.origin !== new URL(expectedOrigin).origin) {
         throw new Error("Live tests are restricted to the imported specification's base origin.");
     }
+    if (typeof window !== "undefined") throw new Error("Live testing runs locally through the CLI or generated server. Browser inspection and mocks do not send API requests.");
+    let body: BodyInit | undefined = request.body;
+    if (request.bodyKind === "binary") body = Uint8Array.from(atob(request.body || ""), (c) => c.charCodeAt(0));
+    if (request.bodyKind === "multipart") {
+        const form = new FormData();
+        for (const part of request.multipart || []) {
+            if (part.binary) form.append(part.name, new Blob([Uint8Array.from(atob(part.value), (c) => c.charCodeAt(0))]), part.name);
+            else form.append(part.name, part.value);
+        }
+        body = form;
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const started = performance.now();
@@ -164,14 +151,28 @@ export async function executeInspectedRequest(request: InspectedHttpRequest, exp
         const response = await fetch(request.url, {
             method: request.method,
             headers: request.headers,
-            body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+            body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
             credentials: "omit",
             redirect: "error",
             referrerPolicy: "no-referrer",
             signal: controller.signal,
         });
-        const raw = await response.text();
-        if (raw.length > 262_144) throw new Error("Live response exceeded the 256 KiB sandbox limit.");
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let raw = "";
+        let bytes = 0;
+        if (reader) {
+            try {
+                while (true) {
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    bytes += chunk.value.byteLength;
+                    if (bytes > 262_144) throw new Error("Live response exceeded the 256 KiB sandbox limit.");
+                    raw += decoder.decode(chunk.value, { stream: true });
+                }
+                raw += decoder.decode();
+            } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+        }
         let parsed: unknown = raw;
         try { parsed = raw ? JSON.parse(raw) : null; } catch { /* text response */ }
         const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);

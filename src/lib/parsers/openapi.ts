@@ -1,3 +1,4 @@
+import { assertBoundedJson } from "../json/bounds.ts";
 import SwaggerParser from "@apidevtools/swagger-parser";
 import type { ParsedSpec } from "../api-model/parsed-spec.ts";
 import { buildOpenAPIModel } from "../api-model/openapi.ts";
@@ -5,17 +6,33 @@ import type { OpenAPISpec } from "../api-model/openapi.ts";
 import type { ApiMediaType, ApiModel, ApiOperation, ApiResponse, ApiSchema, ApiServer } from "../api-model/types.ts";
 import { apiModelToParsedSpec } from "../api-model/legacy.ts";
 
+function assertInternalReferences(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    if ("$ref" in value && typeof value.$ref === "string" && !value.$ref.startsWith("#")) {
+        throw new Error("External schema references are not fetched. Bundle them into the specification before importing.");
+    }
+    for (const child of Object.values(value)) assertInternalReferences(child);
+}
+
 // Parse OpenAPI/Swagger spec
 export async function parseOpenAPISpec(input: string | object): Promise<ParsedSpec> {
     try {
+        if (typeof input === "object") { assertBoundedJson(input); assertInternalReferences(input); }
         // Parse and dereference the spec - this resolves all $refs!
-        const api = (await SwaggerParser.dereference(input as string)) as OpenAPISpec;
+        const api = (await SwaggerParser.dereference(input as string, {
+            dereference: { circular: false },
+            resolve: { external: false },
+        })) as OpenAPISpec;
+        assertBoundedJson(api);
+        assertInternalReferences(api);
         return apiModelToParsedSpec(buildOpenAPIModel(api, {
             importedFrom: typeof input === "string" ? input : undefined,
         }));
     } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to parse OpenAPI spec";
-        throw new Error(`OpenAPI parsing error: ${message}`);
+        throw new Error(/circular/i.test(message)
+            ? "Recursive schema references are not supported yet. Use a finite request/response schema and re-import. Your current project has been kept."
+            : `OpenAPI parsing error: ${message}`);
     }
 }
 

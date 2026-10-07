@@ -5,6 +5,7 @@ export interface McpClientConfigInput {
     stdioCommand?: string;
     stdioArgs?: string[];
     env?: Record<string, string>;
+    headers?: Record<string, string>;
 }
 
 export type ClientOperatingSystem = "macos" | "windows" | "linux";
@@ -49,7 +50,7 @@ export function renderMcpClientConfig(input: McpClientConfigInput): string {
             args: input.stdioArgs || [],
             env: input.env || {},
         }
-        : { url: input.transportUrl };
+        : { url: input.transportUrl, ...(input.headers ? { headers: input.headers } : {}) };
 
     return JSON.stringify({
         mcpServers: {
@@ -69,6 +70,7 @@ export function renderVsCodeClientConfig(input: McpClientConfigInput): string {
         : {
             type: input.transport === "sse" ? "sse" : "http",
             url: input.transportUrl,
+            ...(input.headers ? { headers: input.headers } : {}),
         };
     return JSON.stringify({ servers: { [input.serverName]: server } }, null, 2);
 }
@@ -85,18 +87,23 @@ export function renderClaudeCodeCommand(input: McpClientConfigInput): string {
             .filter(Boolean)
             .map(quoteShellArgument)
             .join(" ");
-        return `claude mcp add ${name} -- ${command}`;
+        const envFlags = Object.entries(input.env || {}).map(([key, value]) => ` --env ${quoteShellArgument(`${key}=${value}`)}`).join("");
+        return `claude mcp add${envFlags} ${name} -- ${command}`;
     }
 
     const transport = input.transport === "sse" ? "sse" : "http";
-    return `claude mcp add --transport ${transport} ${name} ${quoteShellArgument(input.transportUrl || "")}`;
+    const headers = Object.entries(input.headers || {}).map(([key, value]) => ` --header ${quoteShellArgument(`${key}: ${value}`)}`).join("");
+    return `claude mcp add --transport ${transport}${headers} ${name} ${quoteShellArgument(input.transportUrl || "")}`;
 }
 
 
 export function renderConnectionCheck(input: McpClientConfigInput, client: McpClient): string {
     if (client === "claude-code") return `claude mcp get ${quoteShellArgument(input.serverName)} && claude mcp list`;
     if (input.transport !== "stdio") {
-        return `curl --fail --show-error --include ${quoteShellArgument(input.transportUrl || "")}`;
+        if (input.transport === "sse") return "npx --yes @modelcontextprotocol/inspector";
+        const headers = Object.entries(input.headers || {}).map(([key, value]) => ` -H ${quoteShellArgument(`${key}: ${value}`)}`).join("");
+        const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "mcpmint-check", version: "1" } } });
+        return `curl --fail --show-error --include -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'${headers} --data ${quoteShellArgument(body)} ${quoteShellArgument(input.transportUrl || "")}`;
     }
     const command = [input.stdioCommand || "", ...(input.stdioArgs || [])]
         .filter(Boolean)

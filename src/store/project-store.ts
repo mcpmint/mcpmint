@@ -4,6 +4,7 @@ import { getBodyContentKind, isBinarySchema, isShallowSimpleObjectSchema } from 
 import { projectStorageKey, upsertProjectHistory } from "./project-history";
 import {
     parseProjectFile,
+    validateProjectSnapshot,
     serializeProjectFile,
     type PortableProjectFile,
     type ProjectSnapshotData,
@@ -509,7 +510,7 @@ function normalizeMcpServerAuthConfig(
 
 // Generate unique ID
 function generateId(): string {
-    return Math.random().toString(36).substring(2, 9);
+    return crypto.randomUUID();
 }
 
 function snapshotFromState(state: ProjectState): ProjectSnapshotData | null {
@@ -624,7 +625,7 @@ export const useProjectStore = create<ProjectState>()(
                     specSource: source,
                     specFormat: nextSpec.format || "openapi",
                     tools: mergedTools,
-                    authConfig: inferAuthConfig(nextSpec.securitySchemes),
+                    authConfig: state.authConfig,
                     lastSpecDiff: diff,
                     error: null,
                 });
@@ -697,7 +698,6 @@ export const useProjectStore = create<ProjectState>()(
                 if (!snapshot) return false;
                 const existing = state.savedProjects.find((candidate) =>
                     candidate.id === state.activeProjectId
-                    || (!state.activeProjectId && candidate.source === snapshot.specSource)
                 );
                 const savedAt = Date.now();
                 const projectName = (name ?? state.projectName).trim() || state.spec.info.title || "Untitled project";
@@ -718,7 +718,7 @@ export const useProjectStore = create<ProjectState>()(
                     writeProjectSnapshot(project.id, snapshot);
                 } catch (e) {
                     console.error("Failed to save project:", e);
-                    set({ error: "Your download succeeded, but this project could not be saved to browser history. Check private-browsing or storage settings." });
+                    set({ error: "This project could not be saved to browser history. Export a project file or download the server to keep a copy, and check browser storage settings." });
                     return false;
                 }
 
@@ -749,7 +749,7 @@ export const useProjectStore = create<ProjectState>()(
                         return false;
                     }
 
-                    const { spec, specSource, specFormat, tools, authConfig, mcpServerAuthConfig, serverConfig, exportConfig } = JSON.parse(data);
+                    const { spec, specSource, specFormat, tools, authConfig, mcpServerAuthConfig, serverConfig, exportConfig } = validateProjectSnapshot(JSON.parse(data));
 
                     // Projects saved before the canonical migration lack
                     // spec.apiModel, which generation now requires.
@@ -872,15 +872,14 @@ export const useProjectStore = create<ProjectState>()(
                 try {
                     const file = parseProjectFile(text);
                     const state = get();
-                    const existing = state.savedProjects.find((project) =>
-                        project.id === file.project.id || project.source === file.project.source
-                    );
-                    const id = existing?.id || file.project.id || generateId();
+                    const id = generateId(); // Import a copy; never overwrite a local project.
                     const savedAt = Date.now();
                     const project: SavedProject = { ...file.project, id, savedAt };
                     writeProjectSnapshot(id, file.data);
                     const update = upsertProjectHistory(state.savedProjects, project, 50);
-                    for (const evicted of update.evicted) localStorage.removeItem(projectStorageKey(evicted.id));
+                    for (const evicted of update.evicted) {
+                        try { localStorage.removeItem(projectStorageKey(evicted.id)); } catch { /* Preserve the successful import if cleanup is unavailable. */ }
+                    }
                     set({
                         spec: file.data.spec,
                         specSource: file.data.specSource,
@@ -961,25 +960,31 @@ export const useProjectStore = create<ProjectState>()(
             merge: (persistedState, currentState) => {
                 const persisted = (persistedState as PersistedProjectState | undefined) || {};
 
-                const spec = persisted.spec ?? currentState.spec;
-
+                let snapshot: ProjectSnapshotData | null = null;
+                let recoveryError: string | null = null;
+                try {
+                    if (persisted.spec) snapshot = validateProjectSnapshot({
+                        ...persisted,
+                        specSource: persisted.specSource || "unknown",
+                        specFormat: persisted.specFormat || "openapi",
+                    });
+                } catch {
+                    recoveryError = "Your previous session is damaged or from an unsupported version. Import the original spec or a valid project file to recover.";
+                }
+                const history = Array.isArray(persisted.savedProjects) ? persisted.savedProjects.filter((p) =>
+                    p && typeof p.id === "string" && typeof p.name === "string" && typeof p.source === "string"
+                    && typeof p.savedAt === "number" && typeof p.endpointCount === "number") : [];
                 return {
                     ...currentState,
-                    ...persisted,
-                    // Restore the in-progress working session if one was persisted.
-                    spec,
-                    tools: Array.isArray(persisted.tools)
-                        ? persisted.tools.map(sanitizeToolConfig)
-                        : currentState.tools,
-                    authConfig: persisted.authConfig ?? currentState.authConfig,
-                    serverConfig: persisted.serverConfig ?? currentState.serverConfig,
-                    // Only trust a persisted step when there is actually a spec to resume.
-                    currentStep: spec ? (persisted.currentStep ?? currentState.currentStep) : "import",
-                    exportConfig: normalizeExportConfig(persisted.exportConfig),
-                    mcpServerAuthConfig: normalizeMcpServerAuthConfig(persisted.mcpServerAuthConfig),
-                    savedProjects: Array.isArray(persisted.savedProjects)
-                        ? persisted.savedProjects
-                        : currentState.savedProjects,
+                    ...(snapshot || {}),
+                    spec: snapshot?.spec || null,
+                    tools: snapshot?.tools.map(sanitizeToolConfig) || [],
+                    currentStep: snapshot && ["import", "editor", "export"].includes(persisted.currentStep || "") ? persisted.currentStep! : "import",
+                    savedProjects: history,
+                    activeProjectId: snapshot && typeof persisted.activeProjectId === "string" ? persisted.activeProjectId : null,
+                    projectName: snapshot && typeof persisted.projectName === "string" ? persisted.projectName : "Untitled project",
+                    lastSavedAt: typeof persisted.lastSavedAt === "number" ? persisted.lastSavedAt : null,
+                    error: recoveryError,
                 };
             },
             partialize: (state) => ({
