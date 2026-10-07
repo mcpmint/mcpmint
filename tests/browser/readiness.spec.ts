@@ -7,8 +7,15 @@ const require = createRequire(import.meta.url);
 const axeSource = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
 
 test.beforeEach(async ({ page }) => {
-  // Model a human browser; PostHog intentionally drops webdriver/bot events.
-  await page.addInitScript(() => Object.defineProperty(navigator, "webdriver", { get: () => false }));
+  // Model a human browser, including client hints from CI's headless shell.
+  // Production PostHog keeps its webdriver and user-agent bot filters enabled.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+    Object.defineProperty(navigator, "userAgentData", { get: () => ({
+      brands: [{ brand: "Chromium", version: "145" }, { brand: "Google Chrome", version: "145" }],
+      mobile: false, platform: "Linux",
+    }) });
+  });
   // Browser checks never send test traffic to a real analytics project.
   await page.route("https://*.posthog.com/**", route => route.fulfill({ status: 200, contentType: "application/json", body: "{\"status\":1}" }));
 });
