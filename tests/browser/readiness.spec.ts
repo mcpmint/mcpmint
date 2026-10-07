@@ -40,7 +40,21 @@ async function axe(page: Page) {
   const storedTheme = await page.evaluate(() => localStorage.getItem("makemcp-theme") || "dark");
   if (storedTheme !== "system") await expect(page.locator("html")).toHaveClass(new RegExp(storedTheme));
   await page.mouse.move(0, 0);
-  await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); await Promise.all(document.getAnimations().filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime)).map((animation) => animation.finished.catch(() => {}))); });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    let settledFrames = 0;
+    while (settledFrames < 3) {
+      await new Promise(requestAnimationFrame);
+      // Flush styles so lazily created color transitions enter getAnimations().
+      for (const element of document.querySelectorAll("*")) void getComputedStyle(element).color;
+      const animations = document.getAnimations().filter(animation =>
+        animation.playState !== "finished" && Number.isFinite(animation.effect?.getComputedTiming().endTime));
+      if (animations.length) {
+        settledFrames = 0;
+        await Promise.all(animations.map(animation => animation.finished.catch(() => {})));
+      } else settledFrames++;
+    }
+  });
   await page.evaluate(axeSource);
   const violations = await page.evaluate(async () => {
     const result = await (window as unknown as { axe: { run: (options: object) => Promise<{ violations: Array<{ id: string; nodes: Array<{ target: string[]; failureSummary?: string }> }> }> } }).axe.run({ runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] } });
