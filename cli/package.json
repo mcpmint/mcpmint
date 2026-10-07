@@ -1,7 +1,7 @@
 {
   "name": "mcpmint",
   "version": "0.1.0",
-  "description": "Generate MCP servers from OpenAPI and Postman specs — locally, from your terminal. Your spec never leaves your machine.",
+  "description": "Generate MCP servers from OpenAPI and Postman specs \u2014 locally, from your terminal. Your spec never leaves your machine.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -12,7 +12,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=18.17"
+    "node": ">=22"
   },
   "keywords": [
     "mcp",
@@ -39,7 +39,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@apidevtools/swagger-parser": "^12.1.0",
+    "@apidevtools/swagger-parser": "^13.1.0",
     "yaml": "^2.8.2",
     "zod": "^4.1.13"
   },
@@ -47,6 +47,8 @@
     "tsup": "^8.3.5"
   },
   "overrides": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "fast-uri": "4.2.1",
+    "js-yaml@^4": "4.3.2"
   }
 }

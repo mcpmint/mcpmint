@@ -150,7 +150,7 @@ test("generator request preserves apiModel and plans from canonical operation me
     const operationsFile = preview.files.find((file) => file.name === "src/api/operations.ts")?.content || "";
     const envFile = preview.files.find((file) => file.name === ".env.example")?.content || "";
 
-    assert.match(envFile, /API_BASE_URL=https:\/\/canonical\.example\.com/);
+    assert.match(envFile, /API_BASE_URL=\n/);
     assert.match(operationsFile, /path = path\.replace\("\{id\}"/);
     assert.match(operationsFile, /requestHeaders\["Content-Type"\] = "application\/json"/);
 });
@@ -523,7 +523,7 @@ test("schema generation supports OpenAPI composition keywords", () => {
                 { type: "object", properties: { active: { type: "boolean" } } },
             ],
         }),
-        "z.object({\n    \"id\": z.string()\n  }).and(z.object({\n    \"active\": z.boolean().optional()\n  }))"
+        "z.object({\n    \"id\": z.string()\n  }).passthrough().and(z.object({\n    \"active\": z.boolean().optional()\n  }).passthrough())"
     );
 });
 

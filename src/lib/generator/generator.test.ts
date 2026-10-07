@@ -282,7 +282,7 @@ function loadNodeMcpAccessHelpers(accessFile: string): NodeMcpAccessHelpers {
 
 type CompactMetaTool = {
     config: Record<string, unknown>;
-    handler: (args: Record<string, unknown>) => Promise<{ structuredContent?: Record<string, unknown>; isError?: boolean }>;
+    handler: (args: Record<string, unknown>, extra?: { signal: AbortSignal }) => Promise<{ structuredContent?: Record<string, unknown>; isError?: boolean }>;
 };
 
 type CompactServerHarness = {
@@ -314,7 +314,7 @@ function loadNodeCompactServer(serverFile: string, operationCount: number): Comp
     const tools = new Map<string, CompactMetaTool>();
     class MockMcpServer {
         registerTool(name: string, config: Record<string, unknown>, handler: CompactMetaTool["handler"]) {
-            tools.set(name, { config, handler });
+            tools.set(name, { config, handler: (args, extra = { signal: new AbortController().signal }) => handler(args, extra) });
         }
     }
 
@@ -601,7 +601,7 @@ test("node preview surfaces upstream failures as tool errors and emits a registr
     assert.match(packageFile, /"mcpName": "io\.github\.OWNER\/billing-mcp"/);
 });
 
-test("node README emits deploy buttons; python README emits FastMCP Cloud + Docker deploy", () => {
+test("README omits unverified cloud deploy buttons and explains hosting requirements", () => {
     const nodePreview = createPreviewResponse({
         ...openApiBase,
         exportConfig: {
@@ -612,7 +612,8 @@ test("node README emits deploy buttons; python README emits FastMCP Cloud + Dock
         },
     });
     const nodeReadme = getFileContent(nodePreview, "README.md");
-    assert.match(nodeReadme, /## Deploy[\s\S]*Deploy to Cloudflare[\s\S]*Deploy with Vercel[\s\S]*Deploy on Railway/);
+    assert.match(nodeReadme, /## Hosting[\s\S]*Provider-specific adapters are not included/);
+    assert.doesNotMatch(nodeReadme, /Deploy to Cloudflare|vercel\.com\/button|YOUR_TEMPLATE_ID/);
 
     const pythonPreview = createPreviewResponse({
         ...openApiBase,
@@ -624,10 +625,7 @@ test("node README emits deploy buttons; python README emits FastMCP Cloud + Dock
         },
     });
     const pythonReadme = getFileContent(pythonPreview, "README.md");
-    // Python gets a language-appropriate Deploy section, not the Node deploy buttons.
-    assert.match(pythonReadme, /## Deploy[\s\S]*### FastMCP Cloud[\s\S]*fastmcp\.cloud[\s\S]*### Docker/);
-    assert.match(pythonReadme, /docker run -p 8080:8080 -e MCP_TRANSPORT=http/);
-    assert.match(pythonReadme, /Cloudflare Workers one-click deploy is Node-only/);
+    assert.match(pythonReadme, /## Hosting[\s\S]*Provider-specific adapters are not included/);
     assert.doesNotMatch(pythonReadme, /Deploy to Cloudflare/);
     assert.doesNotMatch(pythonReadme, /vercel\.com\/button/);
 });
@@ -665,7 +663,7 @@ test("openapi -> python preview matches golden contract", () => {
     assert.match(pyprojectFile, /"fastmcp==3\.4\.2"/);
     // Modern FastMCP registration: name plus method-derived ToolAnnotations.
     // POST -> not read-only, not idempotent, not destructive; open-world.
-    assert.match(serverFile, /@mcp\.tool\(name="create_customer", annotations=ToolAnnotations\(title="Create a customer", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True\)\)/);
+    assert.match(serverFile, /FunctionTool\.from_function\(create_customer, name="create_customer", annotations=ToolAnnotations\(title="Create a customer", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True\)\)/);
     assert.match(serverFile, /from mcp\.types import ToolAnnotations/);
     assert.match(serverFile, /logging\.basicConfig\(level=logging\.INFO, stream=sys\.stderr\)/);
     assert.match(configFile, /"apiKey:apiKeyHeader:header:x-api-key": \{"type": "apiKey", "in": "header", "name": "x-api-key", "value": os\.getenv\("API_KEY", ""\)\}/);
@@ -682,7 +680,7 @@ test("openapi -> python preview matches golden contract", () => {
     assert.match(readmeFile, /## MCP Server Access[\s\S]*Generated Python FastMCP output enforces MCP server access in `src\/access\.py`/);
     assert.match(readmeFile, /## Known Warnings[\s\S]*- None\./);
     assert.match(readmeFile, /## Tested Runtime Versions[\s\S]*`fastmcp`[\s\S]*`3\.4\.2`/);
-    assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"url": "http:\/\/localhost:8080"/);
+    assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"url": "http:\/\/localhost:8080\/mcp"/);
     assert.doesNotMatch(readmeFile, /## Example MCP Client Config[\s\S]*"env"/);
 });
 
@@ -851,7 +849,7 @@ test("python preview surfaces upstream failures as ToolError and emits a registr
     const apiClientFile = getFileContent(preview, "src/api_client.py");
     // Upstream HTTP failures raise ToolError (an isError tool result) rather than a raw exception.
     assert.match(apiClientFile, /from fastmcp\.exceptions import ToolError/);
-    assert.match(apiClientFile, /if response\.status_code >= 400:\s*\n\s*raise ToolError\(f"HTTP \{response\.status_code\}: \{response\.text\}"\)/);
+    assert.match(apiClientFile, /if response\.status_code >= 400:\s*\n\s*raise ToolError\(f"Upstream returned HTTP \{response\.status_code\}\."\)/);
 
     const serverJson = getFileContent(preview, "server.json");
     const parsed = JSON.parse(serverJson) as {
@@ -892,7 +890,7 @@ test("python Dockerfile is a non-root multi-stage build supporting stdio and HTT
     assert.match(dockerfile, /useradd --system --gid app/);
     assert.match(dockerfile, /USER app/);
     // billing-mcp fixture is http transport.
-    assert.match(dockerfile, /MCP_TRANSPORT=http/);
+    assert.match(dockerfile, /MCP_HOST=0\.0\.0\.0/);
     assert.match(dockerfile, /ENTRYPOINT \["python", "src\/server\.py"\]/);
 });
 
@@ -1128,7 +1126,7 @@ test("postman -> node preview preserves path and headers", () => {
     assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"command": "node"/);
     assert.match(readmeFile, /\/absolute\/path\/to\/orders-mcp\/dist\/src\/index\.js/);
     assert.doesNotMatch(readmeFile, /"args": \[\s*"dist\/src\/index\.js"/);
-    assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"API_BASE_URL": "https:\/\/postman\.example\.com"/);
+    assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"env":/);
     assert.match(readmeFile, /## Example MCP Client Config[\s\S]*"BEARER_TOKEN": "your_token_here"/);
 });
 
@@ -1155,7 +1153,7 @@ test("postman -> python preview preserves tool name and stdio transport", () => 
     const configFile = getFileContent(preview, "src/config.py");
     const operationsFile = getFileContent(preview, "src/operations.py");
     // GET -> read-only, idempotent, not destructive; open-world.
-    assert.match(serverFile, /@mcp\.tool\(name="get_order", annotations=ToolAnnotations\(title="Fetch an order", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True\)\)/);
+    assert.match(serverFile, /FunctionTool\.from_function\(get_order, name="get_order", annotations=ToolAnnotations\(title="Fetch an order", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True\)\)/);
     assert.match(serverFile, /mcp\.run\(transport="stdio"\)/);
     assert.match(configFile, /"bearer:bearer::": \{"type": "bearer", "token": os\.getenv\("BEARER_TOKEN", ""\)\}/);
     assert.match(apiClientFile, /headers\["Authorization"\] = f"Bearer \{scheme\['token'\]\}"/);
@@ -2101,6 +2099,18 @@ function runPythonCompactServer(
     headers = {"content-type": "application/json"}
     text = '{"ok": true}'
 
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_bytes(self):
+        yield b'{"ok": true}'
+
     def json(self):
         return {"ok": True}
 
@@ -2109,7 +2119,7 @@ class Client:
     def __init__(self, *args, **kwargs):
         pass
 
-    def request(self, **kwargs):
+    def stream(self, **kwargs):
         return Response()
 `, "utf8");
         writeFileSync(join(srcDir, "dotenv.py"), "def load_dotenv(*args, **kwargs):\n    return True\n", "utf8");

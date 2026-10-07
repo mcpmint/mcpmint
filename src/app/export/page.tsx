@@ -1,5 +1,8 @@
 "use client";
 
+import { trackEvent } from "@/lib/analytics/client";
+import { toolCountBucket } from "@/lib/analytics/events";
+
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -36,16 +39,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CopyButton } from "@/components/ui/copy-button";
+import { FilePreview } from "@/components/export/file-preview";
 import { TrustScanPanel } from "@/components/export/trust-scan-panel";
 import { RequestSandbox } from "@/components/export/request-sandbox";
+import { installationMetadata } from "@/lib/generator/installation";
 import { InstallationWizard } from "@/components/export/installation-wizard";
 import { AuthConfig, ExportConfig, McpServerAuthConfig, ParsedSpec, ServerConfig, useProjectStore } from "@/store/project-store";
 import { buildToolPlans } from "@/lib/generator/planner";
 import { generateProjectInBrowser, previewProjectInBrowser } from "@/lib/client-generate";
 import { createScanAttestation, scanTools } from "@/lib/scanner";
-import { projectToolsToScanTools } from "@/lib/scanner/from-project";
+import { generationPlanToScanTools } from "@/lib/scanner/from-plan";
 import { buildGenerationPlan } from "@/lib/generator/normalize";
 
 interface PreviewFile {
@@ -231,6 +234,8 @@ interface GeneratedSnapshot {
   baseUrl: string;
   compactMode: boolean;
   toolCount: number;
+  authEnv: Record<string, string>;
+  mcpAuthType: "none" | "bearer";
 }
 
 export default function ExportPage() {
@@ -278,11 +283,6 @@ export default function ExportPage() {
   if (!spec) return null;
 
   const selectedTools = tools.filter((t) => t.enabled);
-  const trustScanTools = projectToolsToScanTools(spec.apiModel, selectedTools);
-  const trustReport = scanTools(trustScanTools);
-  const trustSignature = JSON.stringify(trustScanTools);
-  const riskAccepted = acceptedRiskSignature === trustSignature;
-  const trustDownloadAllowed = trustReport.verdict !== "red" || riskAccepted;
   const generatorPayload = {
     spec: {
       info: spec.info,
@@ -318,6 +318,11 @@ export default function ExportPage() {
   };
   const generatorSignature = JSON.stringify(generatorPayload);
   const generationPlan = buildGenerationPlan(generatorPayload);
+  const trustScanTools = generationPlanToScanTools(generationPlan);
+  const trustReport = scanTools(trustScanTools);
+  const trustSignature = JSON.stringify(trustScanTools);
+  const riskAccepted = acceptedRiskSignature === trustSignature;
+  const trustDownloadAllowed = trustReport.verdict !== "red" || riskAccepted;
   const previewData = previewResult?.signature === generatorSignature ? previewResult.data : null;
   const previewFiles = previewData?.files || [];
   const exportFeatures = { ...defaultExportFeatures, ...(exportConfig.features ?? {}) };
@@ -435,6 +440,8 @@ export default function ExportPage() {
   };
 
   const handleGenerate = async () => {
+    const started = performance.now();
+    const analytics = { language: exportConfig.language, transport: serverConfig.transport, execution: browserMode ? "browser" : "server" };
     setIsGenerating(true);
     setError(null);
     try {
@@ -457,6 +464,7 @@ export default function ExportPage() {
         const blob = await res.blob();
         triggerDownload(blob, `${serverConfig.name}.zip`);
       }
+      trackEvent("generation_succeeded", { ...analytics, compact: exportConfig.compactMode || false, tool_count: toolCountBucket(selectedTools.length), duration_ms: performance.now() - started });
       if (!saveCurrentProject()) {
         setError("The download succeeded, but this project could not be saved to browser history.");
       }
@@ -472,8 +480,10 @@ export default function ExportPage() {
         baseUrl: spec.baseUrl,
         compactMode: exportConfig.compactMode,
         toolCount: selectedTools.length,
+        ...installationMetadata(generationPlan),
       });
     } catch (err) {
+      trackEvent("generation_failed", { ...analytics, duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setIsGenerating(false);
@@ -490,6 +500,8 @@ export default function ExportPage() {
   };
 
   const handlePreview = async () => {
+    const started = performance.now();
+    const analytics = { language: exportConfig.language, transport: serverConfig.transport, execution: browserMode ? "browser" : "server" };
     setIsPreviewing(true);
     setError(null);
     try {
@@ -523,7 +535,9 @@ export default function ExportPage() {
         const data = await res.json() as PreviewData;
         setPreviewResult({ signature: generatorSignature, data });
       }
+      trackEvent("preview_succeeded", { ...analytics, duration_ms: performance.now() - started });
     } catch (err) {
+      trackEvent("preview_failed", { ...analytics, duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Preview failed");
     } finally {
       setIsPreviewing(false);
@@ -553,10 +567,15 @@ export default function ExportPage() {
 
       <main className="pt-14 flex-1 flex flex-col relative z-10">
         {/* ═══ Split view ═══ */}
-        <div className="flex-1 flex">
+        <div className="border-b border-border px-4 sm:px-8 py-3 text-xs text-muted-foreground">
+          <Link href="/guide" className="text-primary underline">Local quickstart and compatibility</Link>
+          <span className="mx-2">·</span><Link href="/privacy" className="underline">Processing and storage</Link>
+          <span className="mx-2">·</span><a href="https://github.com/mcpmint/mcpmint/issues/new?template=generated_server_problem.yml" target="_blank" rel="noopener noreferrer" className="underline">Get help</a>
+        </div>
+        <div className="flex-1 flex flex-col lg:flex-row">
 
           {/* ─── Left: Configuration ─── */}
-          <div className="flex-1 overflow-y-auto border-r border-border">
+          <div className="min-w-0 flex-1 overflow-y-auto border-r border-border">
             <div className="max-w-2xl mx-auto px-4 sm:px-8 py-8 sm:py-10 space-y-0">
 
               <Section title="Guided setup">
@@ -564,7 +583,7 @@ export default function ExportPage() {
                   {([
                     ["local", "Local Claude Desktop", "stdio · localhost · no network listener"],
                     ["remote", "Remote secure HTTP", "HTTP · bearer auth · origin allow-list"],
-                    ["docker", "Docker / cloud", "HTTP · bearer auth · Docker output"],
+                    ["docker", "Docker HTTP", "HTTP · bearer auth · Docker output"],
                   ] as [GuidedPreset, string, string][]).map(([value, label, description]) => (
                     <button key={value} type="button" onClick={() => applyGuidedPreset(value)} className="min-h-24 border border-border bg-surface p-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/[0.04]">
                       <span className="block text-xs font-semibold text-foreground">{label}</span>
@@ -581,14 +600,12 @@ export default function ExportPage() {
                   <LangCard
                     label="Node.js"
                     tag="TS"
-                    tagColor="#339933"
                     selected={exportConfig.language === "node"}
                     onClick={() => setExportConfig({ language: "node", framework: "mcp-ts-sdk", packageManager: "npm" })}
                   />
                   <LangCard
                     label="Python"
                     tag="PY"
-                    tagColor="#3776AB"
                     selected={exportConfig.language === "python"}
                     onClick={() => setExportConfig({ language: "python", framework: "fastmcp" })}
                   />
@@ -784,7 +801,7 @@ export default function ExportPage() {
                     )}
 
                     {mcpServerAuthConfig.type === "none" && (
-                      <div className="border border-amber-500/30 px-3 py-2 text-[11px] leading-relaxed text-amber-500">
+                      <div className="border border-amber-500/30 px-3 py-2 text-[11px] leading-relaxed text-amber">
                         HTTP/SSE MCP server access has no bearer token configured. Prefer localhost binding unless another layer authenticates clients.
                       </div>
                     )}
@@ -842,12 +859,12 @@ export default function ExportPage() {
 
               <ResponsiveDisclosure
                 title="Test before download"
-                description="Inspect, mock, or execute one selected tool"
+                description="Inspect and mock one selected tool; verify live calls locally"
               >
                 <details className="border border-border bg-surface">
                   <summary className="min-h-11 cursor-pointer list-none px-4 py-3 text-xs font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2">
                     Open request sandbox
-                    <span className="ml-2 font-normal text-muted-foreground">Inspect, mock, or execute one selected tool</span>
+                    <span className="ml-2 font-normal text-muted-foreground">Inspect and mock one selected tool; verify live calls locally</span>
                   </summary>
                   <div className="border-t border-border p-4">
                     <RequestSandbox tools={generationPlan.tools} baseUrl={spec.baseUrl} authConfig={authConfig} />
@@ -863,8 +880,8 @@ export default function ExportPage() {
                   <div className="flex items-start gap-3">
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
                     <div className="space-y-2 text-xs">
-                      <p className="font-semibold text-foreground">Every download includes machine-readable provenance.</p>
-                      <p className="leading-relaxed text-muted-foreground">The archive contains a CycloneDX 1.5 SBOM, exact direct-dependency and runtime pins, license summary, weekly Dependabot updates, build provenance, the mcpmint manifest, and a registry-ready server declaration.</p>
+                      <p className="font-semibold text-foreground">Every download includes a generation record and direct-dependency inventory.</p>
+                      <p className="leading-relaxed text-muted-foreground">The archive includes a direct-dependency SBOM and inventory, runtime pins, license summary, Dependabot configuration, and unsigned generator metadata. Install and commit a package-manager lockfile to cover transitive dependencies. The registry declaration is a template: replace owner/package placeholders and validate it before publishing.</p>
                       <div className="flex flex-wrap gap-2 text-[9px] uppercase tracking-wider text-primary">
                         <span className="border border-primary/30 px-2 py-1">mcpmint.sbom.json</span>
                         <span className="border border-primary/30 px-2 py-1">mcpmint.provenance.json</span>
@@ -919,7 +936,7 @@ export default function ExportPage() {
                     Warnings before generation
                   </div>
                   {preGenerationWarnings.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No blocking readiness warnings detected.</p>
+                    <p className="text-xs text-muted-foreground">No configuration warnings detected. Validate installation and a tool call before use.</p>
                   ) : (
                     <ul className="space-y-2">
                       {preGenerationWarnings.map((warning) => (
@@ -935,7 +952,7 @@ export default function ExportPage() {
           </div>
 
           {/* ─── Right: Preview Panel ─── */}
-          <div className="w-[45%] hidden lg:flex flex-col bg-surface">
+          <div className="min-w-0 w-full lg:w-[45%] flex flex-col bg-surface border-t border-border lg:border-t-0">
             {/* Preview header */}
             <div className="px-6 py-4 border-b border-border flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1019,7 +1036,7 @@ export default function ExportPage() {
                       </div>
                       {previewWarnings.length > 0 && (
                         <div className="space-y-1">
-                          <div className="text-amber-500">Warnings</div>
+                          <div className="text-amber">Warnings</div>
                           {previewWarnings.slice(0, 5).map((issue, index) => (
                             <div key={`${issue.message}-${index}`} className="normal-case tracking-normal text-[11px] leading-relaxed">
                               {issue.path ? `${issue.path}: ` : ""}{issue.message}
@@ -1045,37 +1062,13 @@ export default function ExportPage() {
                       </div>
                     </div>
                   </div>
-                <Tabs defaultValue={previewFiles[0]?.name} className="flex flex-col h-full">
-                  <TabsList className="flex-wrap h-auto gap-0 bg-background border-b border-border px-4 py-0 rounded-none">
-                    {previewFiles.map((f) => (
-                      <TabsTrigger
-                        key={f.name}
-                        value={f.name}
-                        className="text-[10px] px-3 py-2.5 tracking-wider data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-                      >
-                        {f.name}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  {previewFiles.map((f) => (
-                    <TabsContent key={f.name} value={f.name} className="flex-1 m-0">
-                      <div className="relative h-full">
-                        <div className="absolute right-3 top-3 z-10">
-                          <CopyButton value={f.content} />
-                        </div>
-                        <pre className="p-4 overflow-auto h-full text-[11px] leading-5 bg-background">
-                          <code>{f.content}</code>
-                        </pre>
-                      </div>
-                    </TabsContent>
-                  ))}
-                </Tabs>
+                <FilePreview files={previewFiles} />
                 </div>
               )}
             </div>
 
             {/* Summary strip */}
-            <div className="px-6 py-3 border-t border-border flex items-center gap-4 text-[10px] text-muted-foreground tracking-wider uppercase">
+            <div className="px-6 py-3 border-t border-border flex flex-wrap items-center gap-x-4 gap-y-2 text-[10px] text-muted-foreground tracking-wider uppercase">
               <span>{exportConfig.language === "node" ? "TypeScript" : "Python"}</span>
               <span className="text-primary/20">·</span>
               <span>{getTransportLabel(serverConfig.transport)}</span>
@@ -1101,7 +1094,7 @@ export default function ExportPage() {
             <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground/70" />
             {browserMode ? (
               <p>
-                Privacy mode is on. Your spec is processed entirely in your browser to generate the code and build the zip; it is never sent to any server. Nothing is uploaded, stored, or shared.
+                Privacy mode is on. Your spec is processed entirely in your browser to generate the code and build the zip; it is never sent to any server. Your session and saved projects stay in this browser’s local storage. Clear them from project history or browser settings. Imported examples may contain secrets; review them before saving or sharing.
               </p>
             ) : (
               <p>
@@ -1109,7 +1102,7 @@ export default function ExportPage() {
               </p>
             )}
           </div>
-          <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap gap-3 items-center justify-between">
             <Button
               variant="ghost"
               onClick={() => { setCurrentStep("editor"); router.push("/editor"); }}
@@ -1139,7 +1132,7 @@ export default function ExportPage() {
               <Button
                 onClick={handleGenerate}
                 disabled={isGenerating || !canGenerate}
-                className="bg-primary text-primary-foreground hover:bg-primary/90 px-10 font-semibold text-xs tracking-wider"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 sm:px-10 font-semibold text-xs tracking-wider"
               >
                 {isGenerating ? (
                   <>
@@ -1184,8 +1177,8 @@ function ResponsiveDisclosure({
   children: React.ReactNode;
 }) {
   return (
-    <details className="progressive-section border-b-2 border-primary/20">
-      <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 py-5 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 lg:hidden">
+    <details open className="progressive-section border-b-2 border-primary/20">
+      <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 py-5 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2">
         <span>
           <span className="block text-base font-semibold text-foreground">{title}</span>
           <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{description}</span>
@@ -1193,7 +1186,6 @@ function ResponsiveDisclosure({
         <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-primary transition-transform duration-200" />
       </summary>
       <div className="progressive-section__body py-8">
-        <h2 className="mb-5 hidden text-lg font-semibold tracking-tight lg:block">{title}</h2>
         {children}
       </div>
     </details>
@@ -1226,13 +1218,11 @@ function Field({
 function LangCard({
   label,
   tag,
-  tagColor,
   selected,
   onClick,
 }: {
   label: string;
   tag: string;
-  tagColor: string;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -1255,8 +1245,7 @@ function LangCard({
         </div>
       )}
       <div
-        className="text-sm font-bold mb-1 tracking-wide"
-        style={{ color: tagColor }}
+        className="text-sm font-bold mb-1 tracking-wide text-foreground"
       >
         {tag}
       </div>
@@ -1304,7 +1293,7 @@ function StatusRow({
 }) {
   const toneClass = {
     success: "text-primary border-primary/30",
-    warning: "text-amber-500 border-amber-500/30",
+    warning: "text-amber border-amber-500/30",
     danger: "text-red border-red/30",
     muted: "text-muted-foreground border-border",
   }[tone];
@@ -1333,8 +1322,8 @@ function EndpointRow({
   const methodTone = {
     GET: "text-primary border-primary/30",
     POST: "text-blue-500 border-blue-500/30",
-    PUT: "text-amber-500 border-amber-500/30",
-    PATCH: "text-amber-500 border-amber-500/30",
+    PUT: "text-amber border-amber-500/30",
+    PATCH: "text-amber border-amber-500/30",
     DELETE: "text-red border-red/30",
   }[method] || "text-muted-foreground border-border";
 
@@ -1371,7 +1360,7 @@ function ManualReviewList({
       {items.map((item) => (
         <div key={item.id} className={`border border-amber-500/30 ${compact ? "px-2 py-2" : "px-3 py-3"}`}>
           <div className="flex items-center gap-2 min-w-0">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber" />
             <p className="truncate text-xs text-foreground">{item.label}</p>
           </div>
           <p className="mt-1 truncate text-[10px] text-muted-foreground">{item.toolName}</p>
@@ -1418,7 +1407,7 @@ function SuccessView({
             <PartyPopper className="w-7 h-7" />
           </div>
           <h1 className="text-3xl font-semibold tracking-tight">
-            Your MCP server is ready
+            Your MCP archive is ready
           </h1>
           <p className="text-sm text-muted-foreground">
             <span className="text-foreground font-medium">{snapshot.serverName}.zip</span> is downloading to your machine.

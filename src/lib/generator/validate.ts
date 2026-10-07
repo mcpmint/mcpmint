@@ -40,6 +40,14 @@ export function validateGenerationPlan(plan: GenerationPlan): ValidationResult {
 
     const displayNames = new Set<string>();
     for (const tool of plan.tools) {
+        if (tool.baseUrl) {
+            try {
+                const url = new URL(tool.baseUrl);
+                if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new Error("unsupported URL");
+            } catch {
+                pushIssue(errors, "error", "Operation server must resolve to an absolute HTTP(S) URL without embedded credentials.", tool.id);
+            }
+        }
         if (!tool.displayName.trim()) {
             pushIssue(errors, "error", "Tool name is required", tool.id);
         }

@@ -121,7 +121,7 @@ function renderNodeRequestBody(requestBody?: GenerationRequestBody): {
             return {
                 setup: "",
                 headerLines: [`      requestHeaders["Content-Type"] = ${JSON.stringify(requestBody.contentType)};`],
-                bodyOption: `        body: ${getNodeBodyExpression(requestBody)},\n`,
+                bodyOption: `        body: Buffer.from(String(${getNodeBodyExpression(requestBody)}), "base64"),\n`,
             };
     }
 }
@@ -165,7 +165,7 @@ function renderNodeOperation(tool: GenerationTool): string {
     const bodySetup = bodyRender.setup ? `${bodyRender.setup.replaceAll("      ", "  ")}\n` : "";
     const bodyHeaderLines = bodyRender.headerLines.map((line) => line.replace("      ", "  ")).join("\n");
 
-    return `async function(args: Record<string, unknown>): Promise<string> {
+    return `async function(args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   let path = ${JSON.stringify(tool.path)};
 ${pathReplacements ? `${pathReplacements}\n` : ""}  const queryString = new URLSearchParams();
 ${queryLines ? `${queryLines}\n` : ""}  const requestHeaders: Record<string, string> = {};
@@ -178,6 +178,8 @@ ${headerLines ? `${headerLines}\n` : ""}${cookieLines ? `${cookieLines}\n` : ""}
   return executeApiRequest({
     path,
     method: ${JSON.stringify(tool.method)},
+    baseUrl: ${JSON.stringify(tool.baseUrl || "")},
+    signal,
     query: queryString,
     headers: requestHeaders,
 ${bodyRender.bodyOption}  });
@@ -291,9 +293,9 @@ function renderNodeServerTool(tool: GenerationTool, operationIndex: number): str
   {
 ${configEntries.join(",\n")}
   },
-  async (args: Record<string, unknown>) => {
+  async (args: Record<string, unknown>, extra) => {
     try {
-      const text = await operations[${operationIndex}](args);
+      const text = await operations[${operationIndex}](args, extra.signal);
 ${successBody}
     } catch (error) {
       // Surface upstream HTTP failures and thrown errors as tool errors (isError)
@@ -345,9 +347,12 @@ function renderConfig(plan: GenerationPlan): string {
         return `  ${JSON.stringify(auth.key)}: { type: "basic", username: process.env.${auth.basicUsernameEnvVar} || "", password: process.env.${auth.basicPasswordEnvVar} || "" },`;
     }).join("\n");
 
-    return `import "dotenv/config";
+    return `import { config } from "dotenv";
+import { fileURLToPath } from "node:url";
+const envFile = new URL(import.meta.url.includes("/dist/src/") ? "../../.env" : "../.env", import.meta.url);
+config({ path: fileURLToPath(envFile) });
 
-export const API_BASE_URL = process.env.API_BASE_URL || ${JSON.stringify(plan.spec.baseUrl || "https://api.example.com")};
+export const API_BASE_URL = process.env.API_BASE_URL || "";
 export const AUTH_SCHEMES = {
 ${authSchemeEntries}
 } as const;
@@ -360,8 +365,8 @@ function parseMcpAllowedOrigins(value: string | undefined, fallback: readonly st
 export const MCP_SERVER_CONFIG = {
   name: ${JSON.stringify(plan.server.name)},
   version: ${JSON.stringify(plan.server.version)},
-  host: ${JSON.stringify(plan.server.host)},
-  port: ${plan.server.port},
+  host: process.env.MCP_HOST || ${JSON.stringify(plan.server.host)},
+  port: Number(process.env.PORT || ${plan.server.port}),
 } as const;
 
 export const MCP_SERVER_ACCESS_CONFIG: {
@@ -500,6 +505,8 @@ function renderClient(): string {
 
 export type ApiRequest = {
   path: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
   method: string;
   query?: URLSearchParams;
   headers?: Record<string, string>;
@@ -564,29 +571,40 @@ export function applyAuth(
 }
 
 export async function executeApiRequest(request: ApiRequest): Promise<string> {
-  let url = \`\${API_BASE_URL}\${request.path}\`;
-  if (request.query?.toString()) {
-    url += \`?\${request.query.toString()}\`;
-  }
-
+  const baseUrl = API_BASE_URL || request.baseUrl || "https://api.example.com";
+  let url = baseUrl.replace(/\\/$/, "") + request.path;
+  if (request.query?.toString()) url += \`?\${request.query.toString()}\`;
+  const deadline = AbortSignal.timeout(30_000);
+  const signal = request.signal ? AbortSignal.any([request.signal, deadline]) : deadline;
   const response = await fetch(url, {
     method: request.method,
     headers: request.headers,
     body: request.body,
+    redirect: "error",
+    signal,
   });
-
-  if (!response.ok) {
-    throw new Error(\`HTTP \${response.status}: \${await response.text()}\`);
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > 1_048_576) throw new Error("Upstream response exceeded the 1 MiB limit.");
+        chunks.push(chunk.value);
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
   }
-
-  const responseText = await response.text();
+  if (!response.ok) throw new Error(\`Upstream returned HTTP \${response.status}.\`);
+  const responseText = Buffer.concat(chunks).toString("utf8");
   if (!responseText) return "OK";
-
-  try {
-    return JSON.stringify(JSON.parse(responseText), null, 2);
-  } catch {
-    return responseText;
-  }
+  try { return JSON.stringify(JSON.parse(responseText), null, 2); }
+  catch { return responseText; }
 }
 `;
 }
@@ -1052,7 +1070,7 @@ export function createServer() {
         openWorldHint: true,
       },
     },
-    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } }) => {
+    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } }, extra) => {
       const respond = (payload: Record<string, unknown>, isError: boolean) => ({
         content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
         structuredContent: payload,
@@ -1080,7 +1098,7 @@ export function createServer() {
       // (d) applies auth server-side from config/env. The model never supplies a
       // URL or secret.
       try {
-        const text = await operations[operation.operationIndex](validation.data as Record<string, unknown>);
+        const text = await operations[operation.operationIndex](validation.data as Record<string, unknown>, extra.signal);
         const { data, truncated } = boundedResult(text);
         return respond({ ok: true, status: 200, endpointId: operation.id, data, ...(truncated ? { truncated: true } : {}) }, false);
       } catch (error) {
@@ -1138,15 +1156,14 @@ function renderReadme(plan: GenerationPlan): string {
 function renderDockerfile(plan: GenerationPlan): string {
     // Multi-stage build: compile in a build stage, ship a lean non-root runtime.
     // stdio:  docker run -i --rm IMAGE
-    // HTTP:   docker run -p ${plan.server.port}:${plan.server.port} -e MCP_TRANSPORT=http IMAGE
+    // HTTP: select HTTP when generating, then publish the configured port.
     return `# ---- Build stage ----
 FROM node:22.17.0-alpine3.22 AS build
 WORKDIR /app
 COPY package.json tsconfig.json ./
 RUN npm install
 COPY src ./src
-COPY tests ./tests
-COPY mcpmint.manifest.json ./mcpmint.manifest.json
+${plan.features.tests ? "COPY tests ./tests\n" : ""}COPY mcpmint.manifest.json ./mcpmint.manifest.json
 RUN npm run build
 RUN npm prune --omit=dev
 
@@ -1158,7 +1175,7 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/package.json ./package.json
 USER node
-ENV MCP_TRANSPORT=${plan.runtime.transport}
+ENV MCP_HOST=0.0.0.0
 ENV PORT=${plan.server.port}
 EXPOSE ${plan.server.port}
 ENTRYPOINT ["node", "dist/src/index.js"]
@@ -1245,7 +1262,7 @@ function renderNodeAuthEnvAssignments(plan: GenerationPlan): string {
 function renderNodeMcpAccessBehaviorTest(plan: GenerationPlan): string {
     if (plan.runtime.transport === "stdio") return "";
 
-    const allowedOrigin = plan.mcpServerAuth.allowedOrigins[0] || "https://client.example.test";
+    const allowedOrigin = plan.mcpServerAuth.allowedOrigins[0] || "http://localhost:3000";
     const allowedOrigins = JSON.stringify([allowedOrigin]);
 
     return `
@@ -1330,7 +1347,7 @@ function renderNodeOperationBehaviorTest(tool: GenerationTool, index: number): s
         assertions.push(`  assert.equal(call.init.body, ${JSON.stringify(scalarToExpectedString(args[requestBody.params[0]?.argName || "body"]))});`);
     } else if (requestBody?.contentKind === "binary") {
         assertions.push(`  assert.equal(headers["Content-Type"], ${JSON.stringify(requestBody.contentType)});`);
-        assertions.push(`  assert.equal(call.init.body, args[${JSON.stringify(requestBody.params[0]?.argName || "body")}]);`);
+        assertions.push(`  assert.deepEqual(call.init.body, Buffer.from(String(args[${JSON.stringify(requestBody.params[0]?.argName || "body")}]), "base64"));`);
     }
 
     return `test(${JSON.stringify(`${tool.displayName} operation builds an API request`)}, async () => {
@@ -1359,11 +1376,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
   fetchCalls.push({ url: String(url), init: init || {} });
   const response = nextResponse;
   nextResponse = { ok: true, status: 200, body: JSON.stringify({ ok: true }) };
-  return {
-    ok: response.ok,
-    status: response.status,
-    text: async () => response.body,
-  } as Response;
+  return new Response(response.body, { status: response.status });
 }) as typeof fetch;
 
 const { applyAuth, executeApiRequest } = await import("../src/api/client.js");
@@ -1402,8 +1415,17 @@ test("executeApiRequest constructs URLs and reports HTTP errors", async () => {
   nextResponse = { ok: false, status: 418, body: "teapot" };
   await assert.rejects(
     executeApiRequest({ path: "/failure", method: "POST" }),
-    /HTTP 418: teapot/
+    /Upstream returned HTTP 418\./
   );
+});
+
+test("upstream reads are bounded and private error bodies are redacted", async () => {
+  nextResponse = { ok: true, status: 200, body: "x".repeat(1_048_577) };
+  await assert.rejects(executeApiRequest({ path: "/large", method: "GET" }), /1 MiB limit/);
+  assert.equal(lastFetchCall().init.redirect, "error");
+  assert.ok(lastFetchCall().init.signal instanceof AbortSignal);
+  nextResponse = { ok: false, status: 500, body: "private upstream diagnostic" };
+  await assert.rejects(executeApiRequest({ path: "/private", method: "GET" }), { message: "Upstream returned HTTP 500." });
 });
 
 test("serialization helpers encode paths and queries", () => {
@@ -1465,8 +1487,8 @@ export function generateNodeProject(plan: GenerationPlan): GeneratedProject {
         },
         devDependencies: {
             "@types/node": "20.19.43",
-            tsx: "4.7.0",
-            typescript: "5.3.3",
+            tsx: "4.23.15",
+            typescript: "5.9.3",
         },
     }, null, 2));
 

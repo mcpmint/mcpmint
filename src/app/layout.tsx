@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Analytics } from "@vercel/analytics/next";
+import { ProductAnalytics } from "@/components/analytics/posthog-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SITE_URL } from "@/lib/site";
 import "./globals.css";
@@ -91,7 +91,7 @@ export default function RootLayout({
         <ThemeProvider defaultTheme="dark" storageKey="makemcp-theme">
           {children}
         </ThemeProvider>
-        <Analytics />
+        <ProductAnalytics />
       </body>
     </html>
   );

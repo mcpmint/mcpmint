@@ -137,10 +137,14 @@ Copy [`.env.example`](./.env.example) and set values in your host (e.g. Vercel):
 | Variable | Purpose | Public deploy |
 |----------|---------|---------------|
 | `NEXT_PUBLIC_SITE_URL` | Canonical site URL for SEO/metadata | Set to your domain |
-| `UPSTASH_REDIS_REST_URL` / `TOKEN` | Shared rate limits across isolates | Recommended |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Shared rate limits across isolates | Recommended |
 | `MCPMINT_RATE_LIMIT_MAX` | Requests per IP per minute (default 20) | Optional |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | Public PostHog project token; enables product analytics | Optional |
+| `NEXT_PUBLIC_POSTHOG_HOST` | Project API host: US `https://us.i.posthog.com`, EU `https://eu.i.posthog.com` | Required when analytics is enabled |
 
 Health check: `GET /api/health`.
+
+See [Vercel account migration and PostHog setup](docs/vercel-posthog-setup.md). PostHog uses explicit, filtered workflow events; automatic capture and recording are disabled. Public environment variables are compiled into the browser bundle, so redeploy after changing them.
 
 Default product path generates **and previews in the browser** so specs do not hit the server. Server-side generation remains available when privacy mode is off, but both web paths perform only bounded structural validation. Full process verification is local CLI/CI-only.
 

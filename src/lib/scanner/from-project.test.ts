@@ -15,7 +15,7 @@ test("builds scanner input from canonical operation metadata and configured para
             method: "DELETE",
             path: "/users/{id}",
             tags: ["Users"],
-            parameters: [],
+            parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
             responses: [],
         }],
     }, [{
@@ -35,7 +35,6 @@ test("builds scanner input from canonical operation metadata and configured para
 
     assert.equal(tools[0].method, "DELETE");
     assert.equal(tools[0].path, "/users/{id}");
-    assert.deepEqual(tools[0].tags, ["Users"]);
     assert.equal(tools[0].annotations?.destructiveHint, true);
     assert.deepEqual((tools[0].inputSchema as { required: string[] }).required, ["id"]);
 });

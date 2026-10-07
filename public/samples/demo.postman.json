@@ -1,0 +1,28 @@
+{
+  "info": {
+    "name": "Local Postman Demo",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "ping",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://127.0.0.1:8787/ping",
+          "protocol": "http",
+          "host": [
+            "127",
+            "0",
+            "0",
+            "1"
+          ],
+          "port": "8787",
+          "path": [
+            "ping"
+          ]
+        }
+      }
+    }
+  ]
+}

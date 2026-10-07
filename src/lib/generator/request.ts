@@ -1,3 +1,4 @@
+import { assertBoundedJson } from "../json/bounds.ts";
 import { z } from "zod";
 import type { GeneratorRequest } from "./types.ts";
 import type { ApiModel } from "@/lib/api-model";
@@ -274,5 +275,6 @@ const requestSchema = z.object({
 });
 
 export function parseGeneratorRequestPayload(input: unknown): GeneratorRequest {
+    assertBoundedJson(input);
     return requestSchema.parse(input);
 }

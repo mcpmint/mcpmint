@@ -20,6 +20,7 @@ export interface SpecDiff {
   removed: number;
   changed: number;
   unchanged: number;
+  configurationChanges: string[];
 }
 
 function keyOf(operation: { method: string; path: string }): string {
@@ -86,7 +87,11 @@ export function diffSpecs(previous: ParsedSpec, next: ParsedSpec): SpecDiff {
   for (const [key, operation] of before) {
     if (!after.has(key)) changes.push({ kind: "removed", key, operationId: operation.id, method: operation.method, path: operation.path, details: ["Operation removed"] });
   }
+  const configurationChanges: string[] = [];
+  if (stable(previous.apiModel?.security) !== stable(next.apiModel?.security) || stable(previous.apiModel?.securitySchemes) !== stable(next.apiModel?.securitySchemes)) configurationChanges.push("Source authentication changed. Your configured upstream auth is preserved; review credentials and requirements before exporting.");
+  if (stable(previous.apiModel?.servers) !== stable(next.apiModel?.servers) || previous.baseUrl !== next.baseUrl) configurationChanges.push("Default API server changed. Review the destination before exporting.");
   return {
+    configurationChanges,
     oldVersion: previous.info.version,
     newVersion: next.info.version,
     changes,
