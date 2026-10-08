@@ -32,7 +32,10 @@ test("getClientIp prefers request.ip over spoofable headers", () => {
     );
 });
 
-test("getClientIp uses x-vercel-forwarded-for before XFF and x-real-ip", () => {
+test("getClientIp trusts Vercel headers only on Vercel", () => {
+    const previous = process.env.VERCEL;
+    process.env.VERCEL = "1";
+    try {
     const ip = getClientIp(
         fakeRequest({
             "x-vercel-forwarded-for": "198.51.100.20",
@@ -41,9 +44,14 @@ test("getClientIp uses x-vercel-forwarded-for before XFF and x-real-ip", () => {
         })
     );
     assert.equal(ip, "198.51.100.20");
+    } finally { if (previous === undefined) delete process.env.VERCEL; else process.env.VERCEL = previous; }
+    assert.equal(getClientIp(fakeRequest({ "x-vercel-forwarded-for": "198.51.100.20" })), "unknown");
 });
 
-test("getClientIp uses rightmost X-Forwarded-For hop (platform-appended)", () => {
+test("getClientIp uses rightmost XFF only behind an explicitly trusted proxy", () => {
+    const previous = process.env.MCPMINT_TRUST_X_FORWARDED_FOR;
+    process.env.MCPMINT_TRUST_X_FORWARDED_FOR = "1";
+    try {
     const ip = getClientIp(
         fakeRequest({
             "x-forwarded-for": "spoofed.left, 203.0.113.50",
@@ -51,6 +59,8 @@ test("getClientIp uses rightmost X-Forwarded-For hop (platform-appended)", () =>
         })
     );
     assert.equal(ip, "203.0.113.50");
+    } finally { if (previous === undefined) delete process.env.MCPMINT_TRUST_X_FORWARDED_FOR; else process.env.MCPMINT_TRUST_X_FORWARDED_FOR = previous; }
+    assert.equal(getClientIp(fakeRequest({ "x-forwarded-for": "203.0.113.50" })), "unknown");
 });
 
 test("getClientIp ignores x-real-ip by default (spoofable)", () => {

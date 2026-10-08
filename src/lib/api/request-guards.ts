@@ -12,7 +12,8 @@
 // ---------------------------------------------------------------------------
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = Number(process.env.MCPMINT_RATE_LIMIT_MAX || 20);
+const configuredRateLimit = Number(process.env.MCPMINT_RATE_LIMIT_MAX || 20);
+const RATE_LIMIT_MAX_REQUESTS = Number.isInteger(configuredRateLimit) && configuredRateLimit > 0 ? configuredRateLimit : 20;
 
 interface RateWindow {
     count: number;
@@ -32,8 +33,8 @@ export interface ClientIpSource {
  *
  * Trust order (most trusted first):
  *   1. `request.ip` when the runtime sets it (platform-provided).
- *   2. `x-vercel-forwarded-for` (Vercel overwrites; not client-spoofable).
- *   3. Rightmost hop of `x-forwarded-for` (platform-appended on Vercel/nginx).
+ *   2. `x-vercel-forwarded-for` only when VERCEL=1.
+ *   3. Rightmost XFF hop only on Vercel or with explicit trusted-proxy opt-in.
  *   4. `x-real-ip` ONLY when `MCPMINT_TRUST_X_REAL_IP=1` — many edges do not
  *      strip client-supplied x-real-ip, so trusting it by default enables
  *      rate-limit key rotation.
@@ -47,7 +48,7 @@ export function getClientIp(request: ClientIpSource): string {
 
     // Vercel-specific: connecting client IP (not spoofable by the request).
     const vercelForwarded = request.headers.get("x-vercel-forwarded-for")?.trim();
-    if (vercelForwarded) {
+    if (process.env.VERCEL === "1" && vercelForwarded) {
         const first = vercelForwarded.split(",")[0]?.trim();
         if (first) {
             return first;
@@ -55,7 +56,7 @@ export function getClientIp(request: ClientIpSource): string {
     }
 
     const forwardedFor = request.headers.get("x-forwarded-for");
-    if (forwardedFor) {
+    if ((process.env.VERCEL === "1" || process.env.MCPMINT_TRUST_X_FORWARDED_FOR === "1") && forwardedFor) {
         const hops = forwardedFor
             .split(",")
             .map((hop) => hop.trim())
@@ -93,6 +94,7 @@ function memoryRateLimited(key: string): { limited: boolean; retryAfterSec: numb
             }
         }
 
+        if (memoryBuckets.size > 10_000) memoryBuckets.delete(memoryBuckets.keys().next().value!);
         return { limited: false, retryAfterSec: Math.ceil(RATE_LIMIT_WINDOW_MS / 1000) };
     }
 

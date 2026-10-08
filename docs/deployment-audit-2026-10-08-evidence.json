@@ -1,0 +1,685 @@
+{
+  "auditedOn": "2026-10-08",
+  "commit": "a10fd05",
+  "runtime": "Node v24.19.0",
+  "target": "local next build + next start, production CSP, system Chromium",
+  "scope": "Synthetic fixtures only; external browser requests intercepted. Timing includes processing and rendering. Oversized fixture preparation incurs browser automation transfer overhead; its timings are not a parser benchmark.",
+  "browserStress": [
+    {
+      "test": "25 MiB upload rejected",
+      "url": "/import",
+      "longtasks": [
+        {
+          "start": 1264.6999999999534,
+          "duration": 2478
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        }
+      ],
+      "gaps": [
+        2496.399999999907
+      ],
+      "storageBytes": 606,
+      "overflow": false,
+      "heap": 458164292
+    },
+    {
+      "test": "corrupted upload rejected",
+      "text": "mcpmint\nToggle theme\nFILE\nURL\nPASTE\nIMPORT PROJECT\nDrop your spec here\n\nSwagger 2.0+ / OpenAPI 3.x / Postman v2.1 \u00b7 JSON or YAML\n\nOr select file\nTry a sample API\nERROR: Failed to parse corrupt.json: Flow map must end with a } at line 1, column 19: {\"openapi\":invalid ^"
+    },
+    {
+      "test": "PDF rejected before parsing"
+    },
+    {
+      "test": "import large valid spec",
+      "count": 500,
+      "bytes": 366292,
+      "elapsedMs": 812,
+      "warnings": [],
+      "url": "/editor",
+      "longtasks": [
+        {
+          "start": 1056.8000000000466,
+          "duration": 199
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        }
+      ],
+      "gaps": [
+        274
+      ],
+      "storageBytes": 1214598,
+      "overflow": false,
+      "heap": 32961050
+    },
+    {
+      "test": "export buttons",
+      "buttons": [
+        "Save",
+        "Toggle theme",
+        "Local Claude Desktopstdio \u00b7 localhost \u00b7 no network listener",
+        "Remote secure HTTPHTTP \u00b7 bearer auth \u00b7 origin allow-list",
+        "Docker / cloudHTTP \u00b7 bearer auth \u00b7 Docker output",
+        "TSNode.js",
+        "PYPython",
+        "npm",
+        "yarn",
+        "pnpm",
+        "Refresh",
+        "Back",
+        "Generate & Download"
+      ]
+    },
+    {
+      "test": "large browser ZIP with production CSP",
+      "errors": [],
+      "downloads": [],
+      "text": "amable HTTP (recommended remote)\nOutput\nCompact mode (meta-tools)\n\nExpose 3 meta-tools (list / get-schema / invoke) instead of one tool per endpoint. Keeps large APIs from bloating the model's context window.\n\nDocumentation\n\nInclude README and usage notes\n\nDocker\n\nAdd Dockerfile, compose, and ignore rules\n\nTests\n\nInclude generated smoke tests\n\nUpstream API Auth\nUpstream authentication type\nNone\nGeneration\nGenerate in your browser\n\nPrivacy mode: generate, preview, and zip locally. Your spec never leaves your browser.\n\nGeneration and file preview run entirely on this device. The spec is never uploaded.\n\nExport Readiness\n\nSELECTED ENDPOINTS\n\n500 of 500\n\nDETECTED UPSTREAM AUTH\n\nNone detected\n\nMCP SERVER ACCESS\n\nNone \u00b7 localhost only (deny-by-default)\n\nCHOSEN RUNTIME\n\nNode.js / TypeScript \u00b7 mcp-ts-sdk \u00b7 npm \u00b7 Streamable HTTP\n\nTRUST SCAN\n\nGREEN \u00b7 100/100\n\nWARNINGS BEFORE GENERATION\nHTTP/SSE MCP server access has no bearer token configured. Generated servers still deny non-localhost Origin headers by default; bind to localhost, or select bearer auth and set MCP_AUTH_TOKEN before exposing this server.\nPREVIEW\nRefresh\nSelected endpoints\nGET\n/items/0\n\ngetItem0\n\nGET\n/items/1\n\ngetItem1\n\nGET\n/items/2\n\ngetItem2\n\nGET\n/items/3\n\ngetItem3\n\nGET\n/items/4\n\ngetItem4\n\nGET\n/items/5\n\ngetItem5\n\nGET\n/items/6\n\ngetItem6\n\nGET\n/items/7\n\ngetItem7\n\n+492 more selected\n\nUnsupported / manual review\nNo selected endpoints require manual review.\n\nClick \u201cRefresh\u201d to generate\na live file preview (in-browser, private)\n\nTYPESCRIPT\n\u00b7\nSTREAMABLE HTTP\n\u00b7\n500 TOOLS\n\u00b7\nNONE\n\u00b7\nNONE \u00b7 LOCALHOST ONLY (DENY-BY-DEFAULT)\n\u00b7\nPREVIEW\n\nPrivacy mode is on. Your spec is processed entirely in your browser to generate the code and build the zip; it is never sent to any server. Nothing is uploaded, stored, or shared.\n\nBack\nGenerating",
+      "url": "/export",
+      "longtasks": [
+        {
+          "start": 1056.8000000000466,
+          "duration": 199
+        },
+        {
+          "start": 1582.5,
+          "duration": 58
+        },
+        {
+          "start": 1705.1999999999534,
+          "duration": 60
+        },
+        {
+          "start": 1814,
+          "duration": 87
+        },
+        {
+          "start": 2016.0999999999767,
+          "duration": 62
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        },
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        }
+      ],
+      "gaps": [
+        274,
+        104.40000000002328
+      ],
+      "storageBytes": 1214598,
+      "overflow": false,
+      "heap": 41351705
+    },
+    {
+      "test": "mobile export overflow",
+      "url": "/export",
+      "longtasks": [
+        {
+          "start": 1056.8000000000466,
+          "duration": 199
+        },
+        {
+          "start": 1582.5,
+          "duration": 58
+        },
+        {
+          "start": 1705.1999999999534,
+          "duration": 60
+        },
+        {
+          "start": 1814,
+          "duration": 87
+        },
+        {
+          "start": 2016.0999999999767,
+          "duration": 62
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        },
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        },
+        {
+          "directive": "worker-src",
+          "blocked": "blob"
+        }
+      ],
+      "gaps": [
+        274,
+        104.40000000002328
+      ],
+      "storageBytes": 1214598,
+      "overflow": false,
+      "heap": 41443093
+    },
+    {
+      "test": "import large valid spec",
+      "count": 2000,
+      "bytes": 1468792,
+      "elapsedMs": 2052,
+      "warnings": [],
+      "url": "/editor",
+      "longtasks": [
+        {
+          "start": 749.5999999999767,
+          "duration": 128
+        },
+        {
+          "start": 898.1999999999534,
+          "duration": 110
+        },
+        {
+          "start": 1063,
+          "duration": 60
+        },
+        {
+          "start": 1508.2999999999302,
+          "duration": 729
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        }
+      ],
+      "gaps": [
+        138.29999999993015,
+        129.79999999993015,
+        1037.8000000000466
+      ],
+      "storageBytes": 4872599,
+      "overflow": false,
+      "heap": 78163222
+    },
+    {
+      "test": "import large valid spec",
+      "count": 6000,
+      "bytes": 2612792,
+      "elapsedMs": 5260,
+      "warnings": [
+        "mcpmint: unable to persist session (storage full or unavailable) QuotaExceededError: Failed to execute 'setItem' on 'Storage': Setting the value of 'makemcp-storage' exceeded the quota.\n    at Object.setItem (http://127.",
+        "mcpmint: unable to persist session (storage full or unavailable) QuotaExceededError: Failed to execute 'setItem' on 'Storage': Setting the value of 'makemcp-storage' exceeded the quota.\n    at Object.setItem (http://127."
+      ],
+      "url": "/editor",
+      "longtasks": [
+        {
+          "start": 753.3999999999069,
+          "duration": 228
+        },
+        {
+          "start": 1001,
+          "duration": 186
+        },
+        {
+          "start": 1230.8999999999069,
+          "duration": 322
+        },
+        {
+          "start": 2611.79999999993,
+          "duration": 2205
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        }
+      ],
+      "gaps": [
+        244.5,
+        195.70000000006985,
+        338.5999999999767,
+        3095.1999999999534
+      ],
+      "storageBytes": 606,
+      "overflow": false,
+      "heap": 197551514
+    },
+    {
+      "test": "home clipboard bypasses 5 MiB limit",
+      "bytes": 6291705,
+      "url": "/editor",
+      "longtasks": [
+        {
+          "start": 769,
+          "duration": 101
+        },
+        {
+          "start": 876.9000000000233,
+          "duration": 96
+        }
+      ],
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        }
+      ],
+      "gaps": [
+        118.59999999997672,
+        105.59999999997672
+      ],
+      "storageBytes": 606,
+      "overflow": false,
+      "heap": 25876002
+    }
+  ],
+  "boundaryChecks": [
+    {
+      "test": "small ZIP succeeds",
+      "filename": "boundary-api.zip"
+    },
+    {
+      "test": "reload persisted export",
+      "url": "http://127.0.0.1:3100/",
+      "resume": 1
+    },
+    {
+      "test": "update spec bypasses size limit",
+      "bytes": 6291683,
+      "visible": "Spec regenerated \u00b7 v1.0.0 \u2192 v1.0.0"
+    },
+    {
+      "test": "corrupt update error hidden",
+      "bodyHasError": false,
+      "alerts": [
+        ""
+      ]
+    },
+    {
+      "test": "recursive response schema",
+      "url": "http://127.0.0.1:3100/import",
+      "text": "mcpmint\nToggle theme\nFILE\nURL\nPASTE\nIMPORT PROJECT\nDrop your spec here\n\nSwagger 2.0+ / OpenAPI 3.x / Postman v2.1 \u00b7 JSON or YAML\n\nOr select file\nTry a sample API\nERROR: Maximum call stack size exceeded"
+    },
+    {
+      "test": "external reference",
+      "url": "http://127.0.0.1:3100/import",
+      "text": "mcpmint\nToggle theme\nFILE\nURL\nPASTE\nIMPORT PROJECT\nDrop your spec here\n\nSwagger 2.0+ / OpenAPI 3.x / Postman v2.1 \u00b7 JSON or YAML\n\nOr select file\nTry a sample API\nERROR: Failed to parse external.json: OpenAPI parsing error: Error downloading https://ref.audit.example/schema.json: Failed to fetch",
+      "violations": [
+        {
+          "directive": "script-src",
+          "blocked": "eval"
+        },
+        {
+          "directive": "connect-src",
+          "blocked": "https://ref.audit.example/schema.json"
+        }
+      ]
+    },
+    {
+      "test": "unreadable project file",
+      "errors": [
+        "Audit read failure"
+      ],
+      "alerts": [
+        ""
+      ],
+      "text": "mcpmint\nToggle theme\nFILE\nURL\nPASTE\nIMPORT PROJECT\nDrop your spec here\n\nSwagger 2.0+ / OpenAPI 3.x / Postman v2.1 \u00b7 JSON or YAML\n\nOr select file\nTry a sample API"
+    },
+    {
+      "fatal": "locator.click: Timeout 8000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /Run live/i })\u001b[22m\n\n    at /tmp/mcpmint-audit/boundaries.cjs:27:55"
+    }
+  ],
+  "additionalChecks": [
+    {
+      "test": "toggle 501",
+      "elapsedMs": 1124,
+      "gaps": [
+        842.6999999999534
+      ]
+    },
+    {
+      "test": "generate 501",
+      "text": [
+        "[ { \"origin\": \"array\", \"code\": \"too_big\", \"maximum\": 500, \"inclusive\": true, \"path\": [ \"tools\" ], \"message\": \"Too big: expected array to have <=500 items\" }"
+      ]
+    },
+    {
+      "test": "desktop disclosures",
+      "summaries": [
+        {
+          "text": "MCP Server AccessControl authentication and browser origin policy",
+          "visible": 0,
+          "open": false,
+          "bodyHeight": 367.375
+        },
+        {
+          "text": "Trust ScanReview permissions and acknowledge risk before download",
+          "visible": 0,
+          "open": false,
+          "bodyHeight": 0
+        },
+        {
+          "text": "Test before downloadInspect, mock, or execute one selected tool",
+          "visible": 0,
+          "open": false,
+          "bodyHeight": 158
+        },
+        {
+          "text": "Supply chainInspect the provenance and dependency artifacts in the archive",
+          "visible": 0,
+          "open": false,
+          "bodyHeight": 304.75
+        }
+      ],
+      "sandboxVisible": false
+    },
+    {
+      "fatal": "locator.click: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('Request sandbox', { exact: true })\u001b[22m\n\n    at [stdin]:10:105"
+    }
+  ],
+  "sandboxChecks": [
+    {
+      "alerts": [
+        "Failed to fetch",
+        ""
+      ],
+      "violations": [
+        {
+          "directive": "connect-src",
+          "blocked": "https://api.example.com/items"
+        }
+      ]
+    },
+    {
+      "desktopSummaryVisible": false,
+      "desktopInnerSummaryVisible": false,
+      "h2Visible": false
+    }
+  ],
+  "dependencyAudit": {
+    "dependencies": {
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 3,
+        "high": 12,
+        "critical": 1,
+        "total": 16
+      },
+      "packages": [
+        {
+          "name": "@humanfs/node",
+          "severity": "moderate",
+          "direct": false,
+          "range": "<0.16.8",
+          "fixAvailable": true
+        },
+        {
+          "name": "@next/eslint-plugin-next",
+          "severity": "high",
+          "direct": false,
+          "range": ">=14.3.0-canary.0",
+          "fixAvailable": {
+            "name": "eslint-config-next",
+            "version": "14.2.35",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "baseline-browser-mapping",
+          "severity": "moderate",
+          "direct": false,
+          "range": ">=2.0.0 <2.11.0",
+          "fixAvailable": true
+        },
+        {
+          "name": "brace-expansion",
+          "severity": "high",
+          "direct": false,
+          "range": "<=1.1.20 || 2.0.0 - 2.1.6 || 4.0.0 - 5.0.11",
+          "fixAvailable": true
+        },
+        {
+          "name": "braces",
+          "severity": "high",
+          "direct": false,
+          "range": "*",
+          "fixAvailable": {
+            "name": "eslint-config-next",
+            "version": "14.2.35",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "browserslist",
+          "severity": "high",
+          "direct": false,
+          "range": "<=4.28.6",
+          "fixAvailable": true
+        },
+        {
+          "name": "eslint-config-next",
+          "severity": "high",
+          "direct": true,
+          "range": ">=14.3.0-canary.0",
+          "fixAvailable": {
+            "name": "eslint-config-next",
+            "version": "14.2.35",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "fast-glob",
+          "severity": "high",
+          "direct": false,
+          "range": "*",
+          "fixAvailable": {
+            "name": "eslint-config-next",
+            "version": "14.2.35",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "fast-uri",
+          "severity": "high",
+          "direct": false,
+          "range": "4.0.0 - 4.1.4",
+          "fixAvailable": true
+        },
+        {
+          "name": "js-yaml",
+          "severity": "high",
+          "direct": false,
+          "range": "4.0.0 - 4.3.1",
+          "fixAvailable": true
+        },
+        {
+          "name": "micromatch",
+          "severity": "high",
+          "direct": false,
+          "range": ">=0.2.0",
+          "fixAvailable": {
+            "name": "eslint-config-next",
+            "version": "14.2.35",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "nanoid",
+          "severity": "high",
+          "direct": false,
+          "range": "<3.3.18",
+          "fixAvailable": true
+        },
+        {
+          "name": "next",
+          "severity": "critical",
+          "direct": true,
+          "range": "9.3.4-canary.0 - 16.3.7",
+          "fixAvailable": true
+        },
+        {
+          "name": "postcss",
+          "severity": "moderate",
+          "direct": false,
+          "range": "<=8.5.22",
+          "fixAvailable": true
+        },
+        {
+          "name": "sharp",
+          "severity": "high",
+          "direct": false,
+          "range": "<=0.35.5-rc.1",
+          "fixAvailable": true
+        },
+        {
+          "name": "source-map-js",
+          "severity": "high",
+          "direct": false,
+          "range": "1.0.0 - 1.2.1",
+          "fixAvailable": true
+        }
+      ]
+    },
+    "production-dependencies": {
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 2,
+        "high": 9,
+        "critical": 1,
+        "total": 12
+      },
+      "packages": [
+        {
+          "name": "@apidevtools/json-schema-ref-parser",
+          "severity": "high",
+          "direct": false,
+          "range": "",
+          "fixAvailable": {
+            "name": "@apidevtools/swagger-parser",
+            "version": "13.1.0",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "@apidevtools/swagger-parser",
+          "severity": "high",
+          "direct": true,
+          "range": "12.0.0 - 12.1.0",
+          "fixAvailable": {
+            "name": "@apidevtools/swagger-parser",
+            "version": "13.1.0",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "ajv",
+          "severity": "high",
+          "direct": false,
+          "range": "",
+          "fixAvailable": true
+        },
+        {
+          "name": "baseline-browser-mapping",
+          "severity": "moderate",
+          "direct": false,
+          "range": ">=2.0.0 <2.11.0",
+          "fixAvailable": true
+        },
+        {
+          "name": "brace-expansion",
+          "severity": "high",
+          "direct": false,
+          "range": "4.0.0 - 5.0.11",
+          "fixAvailable": true
+        },
+        {
+          "name": "fast-uri",
+          "severity": "high",
+          "direct": false,
+          "range": "4.0.0 - 4.1.4",
+          "fixAvailable": true
+        },
+        {
+          "name": "js-yaml",
+          "severity": "high",
+          "direct": false,
+          "range": "4.0.0 - 4.3.1",
+          "fixAvailable": {
+            "name": "@apidevtools/swagger-parser",
+            "version": "13.1.0",
+            "isSemVerMajor": true
+          }
+        },
+        {
+          "name": "nanoid",
+          "severity": "high",
+          "direct": false,
+          "range": "<3.3.18",
+          "fixAvailable": true
+        },
+        {
+          "name": "next",
+          "severity": "critical",
+          "direct": true,
+          "range": "9.3.4-canary.0 - 16.3.7",
+          "fixAvailable": true
+        },
+        {
+          "name": "postcss",
+          "severity": "moderate",
+          "direct": false,
+          "range": "<=8.5.22",
+          "fixAvailable": true
+        },
+        {
+          "name": "sharp",
+          "severity": "high",
+          "direct": false,
+          "range": "<=0.35.5-rc.1",
+          "fixAvailable": true
+        },
+        {
+          "name": "source-map-js",
+          "severity": "high",
+          "direct": false,
+          "range": "1.0.0 - 1.2.1",
+          "fixAvailable": true
+        }
+      ]
+    }
+  },
+  "harnessNotes": "Fatal entries in boundary/additional harness runs are selector/visibility stops. Successfully completed observations are retained verbatim. The sandbox was retested separately with corrected selectors and completed. Desktop visibility failure was independently confirmed in that completed check."
+}

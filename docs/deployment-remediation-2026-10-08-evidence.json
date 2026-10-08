@@ -1,0 +1,252 @@
+{
+  "date": "2026-10-08",
+  "scope": "Local production build and synthetic browser fixtures; no deployment or actual search indexing verified.",
+  "runtime": {
+    "node": "24.19.0",
+    "next": "16.4.0",
+    "browser": "System Chromium"
+  },
+  "checks": {
+    "build": "pass",
+    "lint": "pass, no warnings",
+    "typecheck": "pass",
+    "generatorUnit": 64,
+    "parserTests": 17,
+    "apiUnit": 14,
+    "workflowTests": 52,
+    "cliTests": 6,
+    "generatedFullVerification": 2,
+    "cliBuild": "pass",
+    "apiSmoke": "Private IP and file URLs, and invalid generation payload rejected with HTTP 400"
+  },
+  "dependencyAudits": {
+    "root": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "cli": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "initialJavaScript": [
+    {
+      "route": "/",
+      "initialJavaScriptBytes": 761030,
+      "initialJavaScriptGzipBytes": 241492,
+      "scriptCount": 13
+    },
+    {
+      "route": "/import",
+      "initialJavaScriptBytes": 846557,
+      "initialJavaScriptGzipBytes": 266911,
+      "scriptCount": 14
+    },
+    {
+      "route": "/editor",
+      "initialJavaScriptBytes": 823635,
+      "initialJavaScriptGzipBytes": 261856,
+      "scriptCount": 15
+    },
+    {
+      "route": "/export",
+      "initialJavaScriptBytes": 881673,
+      "initialJavaScriptGzipBytes": 277787,
+      "scriptCount": 14
+    }
+  ],
+  "productionBrowser": [
+    {
+      "test": "5x oversized upload rejected"
+    },
+    {
+      "test": "Corrupt file yields friendly error"
+    },
+    {
+      "test": "Invalid extension rejected"
+    },
+    {
+      "test": "Worker import and bounded editor",
+      "count": 500,
+      "bytes": 366292,
+      "elapsedMs": 1002,
+      "path": "/editor",
+      "maxLongTaskMs": 81,
+      "maxGapMs": 114.59999999962747,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "IndexedDB refresh restores editor",
+      "count": 500
+    },
+    {
+      "test": "Update spec rejects oversized replacement",
+      "count": 500
+    },
+    {
+      "test": "Bulk selection updates once",
+      "count": 500,
+      "path": "/editor",
+      "maxLongTaskMs": 0,
+      "maxGapMs": 0,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "Desktop export evidence visible",
+      "count": 500
+    },
+    {
+      "test": "IndexedDB refresh restores export",
+      "count": 500
+    },
+    {
+      "test": "Large ZIP succeeds under production CSP",
+      "filename": "audit-api.zip",
+      "largestFileBytes": 411312,
+      "entries": 20,
+      "path": "/export",
+      "maxLongTaskMs": 65,
+      "maxGapMs": 108.70000000018626,
+      "violations": [],
+      "overflow": false,
+      "rows": 0,
+      "localStorageChars": 0
+    },
+    {
+      "test": "Worker preview succeeds"
+    },
+    {
+      "test": "Mobile disclosures open without overflow",
+      "path": "/export",
+      "maxLongTaskMs": 102,
+      "maxGapMs": 116.20000000018626,
+      "violations": [],
+      "overflow": false,
+      "rows": 0,
+      "localStorageChars": 0
+    },
+    {
+      "test": "Worker import and bounded editor",
+      "count": 2000,
+      "bytes": 1468792,
+      "elapsedMs": 1150,
+      "path": "/editor",
+      "maxLongTaskMs": 145,
+      "maxGapMs": 151.40000000037253,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "IndexedDB refresh restores editor",
+      "count": 2000
+    },
+    {
+      "test": "Selection cannot exceed the 500-tool export limit",
+      "count": 2000
+    },
+    {
+      "test": "Update spec rejects oversized replacement",
+      "count": 2000
+    },
+    {
+      "test": "Bulk selection updates once",
+      "count": 2000,
+      "path": "/editor",
+      "maxLongTaskMs": 0,
+      "maxGapMs": 0,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "Desktop export evidence visible",
+      "count": 2000
+    },
+    {
+      "test": "IndexedDB refresh restores export",
+      "count": 2000
+    },
+    {
+      "test": "Worker import and bounded editor",
+      "count": 6000,
+      "bytes": 2612792,
+      "elapsedMs": 1383,
+      "path": "/editor",
+      "maxLongTaskMs": 253,
+      "maxGapMs": 261.70000000018626,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "IndexedDB refresh restores editor",
+      "count": 6000
+    },
+    {
+      "test": "Selection cannot exceed the 500-tool export limit",
+      "count": 6000
+    },
+    {
+      "test": "Update spec rejects oversized replacement",
+      "count": 6000
+    },
+    {
+      "test": "Bulk selection updates once",
+      "count": 6000,
+      "path": "/editor",
+      "maxLongTaskMs": 0,
+      "maxGapMs": 0,
+      "violations": [],
+      "overflow": false,
+      "rows": 100,
+      "localStorageChars": 0
+    },
+    {
+      "test": "Desktop export evidence visible",
+      "count": 6000
+    },
+    {
+      "test": "IndexedDB refresh restores export",
+      "count": 6000
+    },
+    {
+      "test": "Home clipboard limit enforced"
+    },
+    {
+      "test": "Recursive schema imports without stack overflow"
+    },
+    {
+      "test": "Storage failure is visible and unsaved project can be exported"
+    },
+    {
+      "test": "Legacy localStorage session migrates to IndexedDB"
+    },
+    {
+      "test": "Desktop red Trust Scan blocks download until visible acknowledgement"
+    },
+    {
+      "test": "HTTPS live sandbox request is allowed by CSP"
+    },
+    {
+      "test": "Static SEO, guides, robots, sitemap, llms, icons and 404 verified"
+    }
+  ]
+}

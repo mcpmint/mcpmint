@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertGraphBudget, MAX_SELECTED_TOOLS } from "../processing/limits.ts";
 import type { GeneratorRequest } from "./types.ts";
 import type { ApiModel } from "@/lib/api-model";
 
@@ -6,7 +7,7 @@ import type { ApiModel } from "@/lib/api-model";
 // user-controlled data that flows into codegen so a single request cannot
 // exhaust memory/CPU. Values are generous for real specs but reject payloads
 // that are clearly hostile or degenerate.
-const MAX_TOOLS = 500;
+const MAX_TOOLS = MAX_SELECTED_TOOLS;
 const MAX_TOOL_PARAMETERS = 500;
 const MAX_ARRAY_ITEMS = 2000;
 const MAX_NAME_LENGTH = 200;
@@ -47,7 +48,7 @@ const toolAnnotationsSchema = z.object({
     openWorldHint: z.boolean().optional(),
 });
 
-const toolSchema = z.object({
+export const toolSchema = z.object({
     endpointId: shortString,
     enabled: z.boolean().default(true),
     toolName: z.string().trim().min(1).max(MAX_NAME_LENGTH),
@@ -63,7 +64,7 @@ const toolSchema = z.object({
     annotations: toolAnnotationsSchema.optional(),
 });
 
-const authSchema = z.discriminatedUnion("type", [
+export const authSchema = z.discriminatedUnion("type", [
     z.object({ type: z.literal("none") }),
     z.object({
         type: z.literal("apiKey"),
@@ -76,7 +77,7 @@ const authSchema = z.discriminatedUnion("type", [
     z.object({ type: z.literal("basic") }),
 ]);
 
-const mcpServerAuthSchema = z.object({
+export const mcpServerAuthSchema = z.object({
     type: z.enum(["none", "bearer"]).default("none"),
     allowedOrigins: z.array(shortString).max(MAX_ARRAY_ITEMS).optional().default([]),
 }).default({
@@ -84,7 +85,7 @@ const mcpServerAuthSchema = z.object({
     allowedOrigins: [],
 });
 
-const exportSchema = z.object({
+export const exportSchema = z.object({
     language: z.enum(["node", "python"]),
     framework: z.enum(["mcp-ts-sdk", "fastmcp"]),
     packageManager: z.enum(["npm", "pnpm", "yarn"]),
@@ -222,7 +223,7 @@ const apiOperationSchema = z.object({
     }).optional(),
 });
 
-const apiModelSchema: z.ZodType<ApiModel> = z.object({
+export const apiModelSchema: z.ZodType<ApiModel> = z.object({
     source: z.object({
         format: apiSourceFormatSchema,
         version: shortString.optional(),
@@ -246,6 +247,18 @@ const apiModelSchema: z.ZodType<ApiModel> = z.object({
     operations: z.array(apiOperationSchema).max(MAX_ARRAY_ITEMS * 5),
 }) as z.ZodType<ApiModel>;
 
+export const serverConfigSchema = z.object({
+    // Constrained charset prevents Zip Slip + header injection (M1/R7).
+    name: z.string().trim().min(1).max(MAX_SERVER_NAME_LENGTH).regex(
+        SAFE_SERVER_NAME,
+        "name may only contain letters, digits, '.', '_' and '-' and must not start with a separator",
+    ),
+    version: shortString,
+    host: shortString,
+    port: z.number().int().min(1).max(65535),
+    transport: z.enum(["stdio", "sse", "http"]).default("http"),
+});
+
 const requestSchema = z.object({
     spec: z.object({
         info: z.object({
@@ -257,22 +270,13 @@ const requestSchema = z.object({
         apiModel: apiModelSchema.optional(),
     }),
     tools: z.array(toolSchema).max(MAX_TOOLS),
-    serverConfig: z.object({
-        // Constrained charset prevents Zip Slip + header injection (M1/R7).
-        name: z.string().trim().min(1).max(MAX_SERVER_NAME_LENGTH).regex(
-            SAFE_SERVER_NAME,
-            "name may only contain letters, digits, '.', '_' and '-' and must not start with a separator",
-        ),
-        version: shortString,
-        host: shortString,
-        port: z.number().int().min(1).max(65535),
-        transport: z.enum(["stdio", "sse", "http"]).default("http"),
-    }),
+    serverConfig: serverConfigSchema,
     authConfig: authSchema,
     mcpServerAuthConfig: mcpServerAuthSchema,
     exportConfig: exportSchema,
 });
 
 export function parseGeneratorRequestPayload(input: unknown): GeneratorRequest {
+    assertGraphBudget(input);
     return requestSchema.parse(input);
 }

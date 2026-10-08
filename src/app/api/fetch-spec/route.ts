@@ -52,7 +52,16 @@ interface SafeTarget {
  * Scheme allowlist + resolve host; reject if any resolved address is private.
  * The returned pinnedIp is used for the actual TCP connection.
  */
-async function assertUrlIsSafe(rawUrl: string): Promise<SafeTarget> {
+function withAbort<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) return Promise.reject(new DOMException("Request timed out.", "AbortError"));
+    return new Promise((resolve, reject) => {
+        const abort = () => reject(new DOMException("Request timed out.", "AbortError"));
+        signal.addEventListener("abort", abort, { once: true });
+        task.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+}
+
+async function assertUrlIsSafe(rawUrl: string, signal: AbortSignal): Promise<SafeTarget> {
     let url: URL;
     try {
         url = new URL(rawUrl);
@@ -83,8 +92,9 @@ async function assertUrlIsSafe(rawUrl: string): Promise<SafeTarget> {
     // treated as blocked — common rebinding staging pattern).
     let addresses: { address: string; family: number }[];
     try {
-        addresses = await lookup(hostname, { all: true });
+        addresses = await withAbort(lookup(hostname, { all: true }), signal);
     } catch {
+        if (signal.aborted) throw new DOMException("Request timed out.", "AbortError");
         throw new BlockedUrlError("Could not resolve the host.");
     }
 
@@ -184,7 +194,7 @@ async function safeFetch(start: SafeTarget, signal: AbortSignal): Promise<Respon
         // Resolve relative redirects against the current URL, then re-validate
         // and re-pin before following.
         const nextUrl = new URL(location, current.url);
-        current = await assertUrlIsSafe(nextUrl.toString());
+        current = await assertUrlIsSafe(nextUrl.toString(), signal);
     }
 
     throw new BlockedUrlError("Too many redirects.");
@@ -213,18 +223,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
     }
 
-    let safeTarget: SafeTarget;
-    try {
-        safeTarget = await assertUrlIsSafe(url);
-    } catch (error) {
-        const message = error instanceof BlockedUrlError ? error.message : "This URL cannot be fetched.";
-        return NextResponse.json({ error: message }, { status: 400 });
-    }
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
     try {
+        const safeTarget = await assertUrlIsSafe(url, controller.signal);
         const response = await safeFetch(safeTarget, controller.signal);
 
         if (!response.ok) {

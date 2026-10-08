@@ -1,3 +1,4 @@
+import { readResponseCapped } from "./read-response.ts";
 import type { GenerationParam, GenerationTool } from "@/lib/generator/types";
 
 export interface InspectedHttpRequest {
@@ -152,12 +153,15 @@ export function createMockMcpResponse(status: number, body: unknown): McpSandbox
     };
 }
 
-export async function executeInspectedRequest(request: InspectedHttpRequest, expectedOrigin: string): Promise<McpSandboxResponse> {
+export async function executeInspectedRequest(request: InspectedHttpRequest, expectedOrigin: string, signal?: AbortSignal): Promise<McpSandboxResponse> {
     const url = new URL(request.url);
     if (url.origin !== new URL(expectedOrigin).origin) {
         throw new Error("Live tests are restricted to the imported specification's base origin.");
     }
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const started = performance.now();
     try {
@@ -170,8 +174,7 @@ export async function executeInspectedRequest(request: InspectedHttpRequest, exp
             referrerPolicy: "no-referrer",
             signal: controller.signal,
         });
-        const raw = await response.text();
-        if (raw.length > 262_144) throw new Error("Live response exceeded the 256 KiB sandbox limit.");
+        const raw = await readResponseCapped(response);
         let parsed: unknown = raw;
         try { parsed = raw ? JSON.parse(raw) : null; } catch { /* text response */ }
         const text = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
@@ -186,7 +189,12 @@ export async function executeInspectedRequest(request: InspectedHttpRequest, exp
                 mode: "live",
             },
         };
+    } catch (error) {
+        if (controller.signal.aborted && !signal?.aborted) throw new Error("The live request timed out after 10 seconds.");
+        if (error instanceof TypeError) throw new Error("The browser could not reach this API. Check its HTTPS URL and CORS settings, or test it from the exported server.");
+        throw error;
     } finally {
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
     }
 }

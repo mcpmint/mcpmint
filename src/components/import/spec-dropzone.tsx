@@ -7,9 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProjectStore } from "@/store/project-store";
-import { parseOpenAPIFromContent, parseOpenAPIFromURL } from "@/lib/parsers/openapi";
+import { useProcessing } from "@/hooks/use-processing";
+import type { PreparedImport } from "@/lib/processing/types";
+import { MAX_SPEC_BYTES } from "@/lib/processing/limits";
 
 export function SpecDropzone() {
+    const { run, runURL } = useProcessing();
     const [url, setUrl] = useState("");
     const [pastedContent, setPastedContent] = useState("");
     const { setSpec, setLoading, setError, isLoading, error } = useProjectStore();
@@ -20,16 +23,15 @@ export function SpecDropzone() {
             setError(null);
 
             try {
-                const content = await file.text();
-                const spec = await parseOpenAPIFromContent(content, file.name);
-                setSpec(spec, file.name);
+                const prepared = await run<PreparedImport>({ action: "parse", file, filename: file.name });
+                setSpec(prepared.spec, file.name, prepared);
             } catch (err) {
                 setError(err instanceof Error ? err.message : "Failed to parse file");
             } finally {
                 setLoading(false);
             }
         },
-        [setSpec, setLoading, setError]
+        [setSpec, setLoading, setError, run]
     );
 
     const handleURLParse = useCallback(async () => {
@@ -39,14 +41,14 @@ export function SpecDropzone() {
         setError(null);
 
         try {
-            const spec = await parseOpenAPIFromURL(url);
-            setSpec(spec, url);
+            const prepared = await runURL<PreparedImport>(url);
+            setSpec(prepared.spec, url, prepared);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to fetch spec");
         } finally {
             setLoading(false);
         }
-    }, [url, setSpec, setLoading, setError]);
+    }, [url, setSpec, setLoading, setError, runURL]);
 
     const handlePasteParse = useCallback(async () => {
         if (!pastedContent.trim()) return;
@@ -55,14 +57,14 @@ export function SpecDropzone() {
         setError(null);
 
         try {
-            const spec = await parseOpenAPIFromContent(pastedContent, "pasted-spec");
-            setSpec(spec, "Pasted Content");
+            const prepared = await run<PreparedImport>({ action: "parse", content: pastedContent, filename: "pasted-spec" });
+            setSpec(prepared.spec, "Pasted Content", prepared);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to parse content");
         } finally {
             setLoading(false);
         }
-    }, [pastedContent, setSpec, setLoading, setError]);
+    }, [pastedContent, setSpec, setLoading, setError, run]);
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         accept: {
@@ -71,6 +73,8 @@ export function SpecDropzone() {
             "text/yaml": [".yaml", ".yml"],
         },
         maxFiles: 1,
+        maxSize: MAX_SPEC_BYTES,
+        onDropRejected: () => setError("Choose one JSON/YAML specification up to 5 MB."),
         onDrop: (files) => {
             if (files[0]) {
                 handleFileParse(files[0]);

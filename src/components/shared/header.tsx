@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { StorageNotice } from "./storage-notice";
 import { useProjectStore } from "@/store/project-store";
 
 const STEPS = [
@@ -183,6 +184,7 @@ export function Header() {
       <div className="h-px bg-border" aria-hidden="true">
         {spec && <div className="h-full bg-primary md:hidden" style={{ width: `${progress}%` }} />}
       </div>
+    <StorageNotice />
     </header>
   );
 }

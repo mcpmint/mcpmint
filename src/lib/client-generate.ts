@@ -15,9 +15,9 @@
 //   - parseGeneratorRequestPayload (request.ts, Zod) -> input validation
 // It then zips the in-memory file map with fflate (zip + strToU8), which is a
 // tiny pure-JS zip implementation with no Node dependencies. The asynchronous
-// API uses workers in browsers, keeping compression off the UI thread.
+// generation and compression run in the dedicated application worker.
 
-import { zip, strToU8 } from "fflate";
+import { zipSync, strToU8 } from "fflate";
 import { buildGenerationPlan } from "@/lib/generator/normalize";
 import { validateGenerationPlan } from "@/lib/generator/validate";
 import { parseGeneratorRequestPayload } from "@/lib/generator/request";
@@ -109,12 +109,9 @@ export async function generateProjectInBrowser(payload: unknown): Promise<Client
     zipInput[`${rootFolder}/${filePath}`] = strToU8(content);
   }
 
-  const zipped = await new Promise<Uint8Array>((resolve, reject) => {
-    zip(zipInput, { level: 6 }, (error, data) => {
-      if (error) reject(error);
-      else resolve(data);
-    });
-  });
+  // This module is executed inside the dedicated processing worker.
+  // Synchronous compression there avoids nested blob workers and their CSP/startup failures.
+  const zipped = zipSync(zipInput, { level: 6 });
 
   // Copy into a fresh ArrayBuffer-backed view so the Blob owns a plain
   // ArrayBuffer (avoids SharedArrayBuffer typing friction with BlobPart).

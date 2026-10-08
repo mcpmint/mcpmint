@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FlaskConical, Loader2, Play, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -51,6 +51,8 @@ export function RequestSandbox({ tools, baseUrl, authConfig }: {
   baseUrl: string;
   authConfig: AuthConfig;
 }) {
+  const requestController = useRef<AbortController | null>(null);
+  useEffect(() => () => requestController.current?.abort(), []);
   const [selectedId, setSelectedId] = useState(tools[0]?.id || "");
   const selectedTool = tools.find((tool) => tool.id === selectedId) || tools[0];
   const sample = useMemo(() => selectedTool ? sampleArguments(selectedTool) : {}, [selectedTool]);
@@ -66,6 +68,7 @@ export function RequestSandbox({ tools, baseUrl, authConfig }: {
   const isMutation = selectedTool ? !["GET", "HEAD"].includes(selectedTool.method) : false;
 
   const resetForTool = (toolId: string) => {
+    requestController.current?.abort();
     const tool = tools.find((candidate) => candidate.id === toolId);
     setSelectedId(toolId);
     setArgumentsText(pretty(tool ? sampleArguments(tool) : {}));
@@ -111,12 +114,15 @@ export function RequestSandbox({ tools, baseUrl, authConfig }: {
       setError("Confirm the state-changing request before executing it.");
       return;
     }
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
     setIsExecuting(true);
     try {
       const authenticated = addAuth(inspected, authConfig, authValue);
-      setResponse(await executeInspectedRequest(authenticated, baseUrl));
+      setResponse(await executeInspectedRequest(authenticated, baseUrl, controller.signal));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Live request failed");
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Live request failed");
     } finally {
       setIsExecuting(false);
     }

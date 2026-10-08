@@ -1,20 +1,22 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import { getBodyContentKind, isBinarySchema, isShallowSimpleObjectSchema } from "@/lib/generator/utils";
+import { persist } from "zustand/middleware";
+import { createToolConfig, sanitizeToolConfig } from "@/lib/project-tools";
 import { projectStorageKey, upsertProjectHistory } from "./project-history";
 import {
-    parseProjectFile,
-    serializeProjectFile,
     type PortableProjectFile,
     type ProjectSnapshotData,
 } from "./project-file";
-import { analyzeCapabilities } from "@/lib/capabilities";
+import type { CapabilityReport } from "@/lib/capabilities";
+import type { PreparedImport } from "@/lib/processing/types";
+import { runProcessing } from "@/lib/processing/client";
+import { createProjectStorage, readStored, writeStored, removeStored } from "@/lib/project-storage";
+import { MAX_SELECTED_TOOLS } from "@/lib/processing/limits";
 import { diffSpecs, type SpecDiff } from "@/lib/spec-diff";
 
 // Parsed API spec types now live in the lib layer (api-model). Re-exported here
 // so existing store consumers keep importing them from the store unchanged.
 export type { ParsedParameter, ParsedEndpoint, ParsedSpec } from "@/lib/api-model/parsed-spec";
-import type { ParsedEndpoint, ParsedSpec } from "@/lib/api-model/parsed-spec";
+import type { ParsedSpec } from "@/lib/api-model/parsed-spec";
 
 // Tool configuration
 export interface ToolConfig {
@@ -101,7 +103,7 @@ export interface SavedProject {
 
 export interface DeletedProject {
     project: SavedProject;
-    data: string;
+    data: ProjectSnapshotData;
 }
 
 // Project state
@@ -118,6 +120,8 @@ export interface ProjectState {
     autosaveStatus: "idle" | "saving" | "saved" | "error";
     lastSavedAt: number | null;
     lastSpecDiff: SpecDiff | null;
+    capabilityReport: CapabilityReport | null;
+    endpointWarnings: PreparedImport["warnings"] | null;
 
     // Tool configurations
     tools: ToolConfig[];
@@ -143,13 +147,14 @@ export interface ProjectState {
     error: string | null;
 
     // Actions
-    setSpec: (spec: ParsedSpec, source: string) => void;
-    regenerateSpec: (spec: ParsedSpec, source: string) => SpecDiff | null;
+    setSpec: (spec: ParsedSpec, source: string, prepared?: PreparedImport) => void;
+    regenerateSpec: (spec: ParsedSpec, source: string, prepared?: PreparedImport) => SpecDiff | null;
     clearSpec: () => void;
     setCurrentStep: (step: "import" | "editor" | "export") => void;
 
     // Tool actions
     toggleTool: (endpointId: string) => void;
+    setToolsEnabled: (ids: string[], enabled: boolean, replace?: boolean) => void;
     toggleAllTools: (enabled: boolean) => void;
     updateToolConfig: (endpointId: string, config: Partial<ToolConfig>) => void;
 
@@ -161,29 +166,19 @@ export interface ProjectState {
 
     // Project history actions
     setProjectName: (name: string) => void;
-    saveCurrentProject: (name?: string) => boolean;
-    loadProject: (id: string) => boolean;
+    saveCurrentProject: (name?: string) => Promise<boolean>;
+    loadProject: (id: string) => Promise<boolean>;
     renameProject: (id: string, name: string) => boolean;
-    deleteProject: (id: string) => void;
-    undoDeleteProject: () => boolean;
-    exportProject: (id?: string) => string | null;
-    importProject: (text: string) => boolean;
-    clearSavedProjects: () => void;
+    deleteProject: (id: string) => Promise<void>;
+    undoDeleteProject: () => Promise<boolean>;
+    exportProject: (id?: string) => Promise<string | null>;
+    importProject: (input: string | PortableProjectFile) => Promise<boolean>;
+    clearSavedProjects: () => Promise<void>;
 
     // State actions
     setLoading: (loading: boolean) => void;
     setError: (error: string | null) => void;
     reset: () => void;
-}
-
-function sanitizeIdentifier(value: string, fallback: string): string {
-    const normalized = value
-        .trim()
-        .replace(/[^a-zA-Z0-9_]+/g, "_")
-        .replace(/^_+|_+$/g, "");
-
-    const safeValue = normalized || fallback;
-    return /^[a-zA-Z_]/.test(safeValue) ? safeValue : `${fallback}_${safeValue}`;
 }
 
 function inferAuthConfig(securitySchemes: ParsedSpec["securitySchemes"]): AuthConfig {
@@ -217,230 +212,6 @@ function inferAuthConfig(securitySchemes: ParsedSpec["securitySchemes"]): AuthCo
     return { type: "none" };
 }
 
-function sanitizeToolConfig(tool: ToolConfig): ToolConfig {
-    return {
-        ...tool,
-        toolName: sanitizeIdentifier(tool.toolName, "tool"),
-        parameters: tool.parameters.map((parameter, index) => ({
-            ...parameter,
-            name: sanitizeIdentifier(parameter.name, `param_${index + 1}`),
-            hidden: parameter.hidden || false,
-        })),
-    };
-}
-
-// Generate a human-readable type string from schema
-function getTypeFromSchema(schema: Record<string, unknown>): string {
-    if (!schema) return "any";
-
-    const type = schema.type as string;
-
-    if (type === "array") {
-        const items = schema.items as Record<string, unknown>;
-        if (items) {
-            return `${getTypeFromSchema(items)}[]`;
-        }
-        return "any[]";
-    }
-
-    if (type === "object" || schema.properties) {
-        // Return a summary of the object structure
-        const props = schema.properties as Record<string, Record<string, unknown>>;
-        if (props) {
-            const keys = Object.keys(props).slice(0, 3);
-            const suffix = Object.keys(props).length > 3 ? ", ..." : "";
-            return `{${keys.join(", ")}${suffix}}`;
-        }
-        return "object";
-    }
-
-    return type || "string";
-}
-
-// Generate example value from schema (recursively resolves nested objects)
-function generateExampleFromSchema(schema: Record<string, unknown>): unknown {
-    if (!schema) return null;
-
-    const type = schema.type as string;
-    const example = schema.example;
-    const defaultVal = schema.default;
-
-    // Use example or default if provided
-    if (example !== undefined) return example;
-    if (defaultVal !== undefined) return defaultVal;
-
-    // Handle enums
-    if (schema.enum && Array.isArray(schema.enum) && schema.enum.length > 0) {
-        return schema.enum[0];
-    }
-
-    // Generate based on type
-    switch (type) {
-        case "string":
-            if (schema.format === "date") return "2024-01-15";
-            if (schema.format === "date-time") return "2024-01-15T10:30:00Z";
-            if (schema.format === "email") return "user@example.com";
-            if (schema.format === "uri" || schema.format === "url") return "https://example.com";
-            if (schema.format === "uuid") return "550e8400-e29b-41d4-a716-446655440000";
-            return "string";
-
-        case "integer":
-        case "number":
-            if (schema.minimum !== undefined) return schema.minimum;
-            return 0;
-
-        case "boolean":
-            return true;
-
-        case "array":
-            const items = schema.items as Record<string, unknown>;
-            if (items) {
-                return [generateExampleFromSchema(items)];
-            }
-            return [];
-
-        case "object":
-        default:
-            const properties = schema.properties as Record<string, Record<string, unknown>>;
-            if (properties) {
-                const obj: Record<string, unknown> = {};
-                for (const [key, propSchema] of Object.entries(properties)) {
-                    obj[key] = generateExampleFromSchema(propSchema);
-                }
-                return obj;
-            }
-            // If no type but has properties, treat as object
-            if (!type && schema.properties) {
-                const props = schema.properties as Record<string, Record<string, unknown>>;
-                const obj: Record<string, unknown> = {};
-                for (const [key, propSchema] of Object.entries(props)) {
-                    obj[key] = generateExampleFromSchema(propSchema);
-                }
-                return obj;
-            }
-            return {};
-    }
-}
-
-// Generate tool name from endpoint
-function generateToolName(endpoint: ParsedEndpoint): string {
-    if (endpoint.operationId) {
-        return sanitizeIdentifier(endpoint.operationId, "tool");
-    }
-
-    // Generate from method + path
-    const pathParts = endpoint.path
-        .split("/")
-        .filter(Boolean)
-        .map((part) => {
-            if (part.startsWith("{") && part.endsWith("}")) {
-                return "By" + part.slice(1, -1).charAt(0).toUpperCase() + part.slice(2, -1);
-            }
-            return part.charAt(0).toUpperCase() + part.slice(1);
-        });
-
-    const methodPrefix = endpoint.method.toLowerCase();
-    return sanitizeIdentifier(methodPrefix + pathParts.join(""), "tool");
-}
-
-// Create tool config from endpoint
-function createToolConfig(endpoint: ParsedEndpoint): ToolConfig {
-    // URL parameters (path, query, header)
-    const urlParams = endpoint.parameters.map((p, index) => ({
-        name: sanitizeIdentifier(p.name, `param_${index + 1}`),
-        originalName: p.name,
-        type: p.type,
-        required: p.required,
-        description: p.description || "",
-        location: p.in as "path" | "query" | "header" | "cookie" | "body",
-    }));
-
-    // Request body parameters (for POST/PUT/PATCH)
-    const bodyParams: ToolConfig["parameters"] = [];
-    let bodySchema: Record<string, unknown> | undefined;
-    let bodyContentType: string | undefined;
-    let bodyExample: string | undefined;
-    let description = endpoint.summary || endpoint.description || `${endpoint.method} ${endpoint.path}`;
-
-    if (endpoint.requestBody?.schema) {
-        const schema = endpoint.requestBody.schema as {
-            type?: string;
-            properties?: Record<string, Record<string, unknown>>;
-            required?: string[];
-            items?: Record<string, unknown>;
-        };
-
-        // Store the full schema
-        bodySchema = endpoint.requestBody.schema;
-        bodyContentType = endpoint.requestBody.contentType;
-
-        // Generate example JSON
-        const example = generateExampleFromSchema(endpoint.requestBody.schema);
-        bodyExample = JSON.stringify(example, null, 2);
-
-        const requiredFields = schema.required || [];
-
-        const bodyKind = getBodyContentKind(
-            {
-                endpointId: endpoint.id,
-                enabled: true,
-                toolName: endpoint.operationId || endpoint.summary || endpoint.id,
-                description,
-                parameters: [],
-                bodySchema,
-                bodyContentType,
-            },
-            []
-        );
-        const exposeProperties =
-            (bodyKind === "flattenedObject" && isShallowSimpleObjectSchema(schema)) ||
-            (["formUrlencoded", "multipart"].includes(bodyKind || "") && Boolean(schema.properties));
-
-        if (schema.properties && exposeProperties) {
-            for (const [propName, propSchema] of Object.entries(schema.properties)) {
-                bodyParams.push({
-                    name: sanitizeIdentifier(propName, `body_${bodyParams.length + 1}`),
-                    originalName: propName,
-                    type: getTypeFromSchema(propSchema),
-                    required: requiredFields.includes(propName),
-                    description: [
-                        (propSchema.description as string) || "",
-                        bodyKind === "multipart" && isBinarySchema(propSchema) ? "Base64-encoded file content." : "",
-                    ].filter(Boolean).join(" "),
-                    location: "body",
-                    schema: propSchema,
-                });
-            }
-        } else if (bodyKind) {
-            bodyParams.push({
-                name: "body",
-                originalName: "body",
-                type: getTypeFromSchema(schema),
-                required: endpoint.requestBody.required,
-                description: schema.type === "array" ? "Request body array" : "Request body",
-                location: "body",
-                schema: schema,
-            });
-        }
-    }
-
-    // Build enhanced description with example if available
-    if (bodyExample && bodyParams.length > 0) {
-        description = `${description}\n\nRequest body example:\n${bodyExample}`;
-    }
-
-    return {
-        endpointId: endpoint.id,
-        enabled: false,
-        toolName: generateToolName(endpoint),
-        description,
-        parameters: [...urlParams, ...bodyParams],
-        bodySchema,
-        bodyContentType,
-        bodyExample,
-    };
-}
-
 // Initial state
 const initialState = {
     currentStep: "import" as const,
@@ -452,6 +223,8 @@ const initialState = {
     autosaveStatus: "idle" as const,
     lastSavedAt: null,
     lastSpecDiff: null as SpecDiff | null,
+    capabilityReport: null as CapabilityReport | null,
+    endpointWarnings: null as PreparedImport["warnings"] | null,
     tools: [],
     authConfig: { type: "none" as const },
     mcpServerAuthConfig: { type: "none" as const, allowedOrigins: [] },
@@ -526,47 +299,17 @@ function snapshotFromState(state: ProjectState): ProjectSnapshotData | null {
     };
 }
 
-function writeProjectSnapshot(id: string, data: ProjectSnapshotData): void {
-    localStorage.setItem(projectStorageKey(id), JSON.stringify(data));
+async function writeProjectSnapshot(id: string, data: ProjectSnapshotData): Promise<void> {
+    await writeStored(projectStorageKey(id), data);
 }
-
-// localStorage-backed storage that fails gracefully when a very large spec
-// exceeds the quota, so persistence never throws and breaks the app.
-const safeLocalStorage = {
-    getItem: (name: string): string | null => {
-        try {
-            return localStorage.getItem(name);
-        } catch {
-            return null;
-        }
-    },
-    setItem: (name: string, value: string): void => {
-        try {
-            localStorage.setItem(name, value);
-        } catch (e) {
-            // Quota exceeded (e.g. an oversized spec) or storage unavailable.
-            // Keep the in-memory session working; just skip persistence.
-            console.warn("mcpmint: unable to persist session (storage full or unavailable)", e);
-        }
-    },
-    removeItem: (name: string): void => {
-        try {
-            localStorage.removeItem(name);
-        } catch {
-            /* no-op */
-        }
-    },
-};
 
 export const useProjectStore = create<ProjectState>()(
     persist(
         (set, get) => ({
             ...initialState,
 
-            setSpec: (spec, source) => {
-                const recommended = new Set(spec.apiModel
-                    ? analyzeCapabilities(spec.apiModel).operations.filter((item) => item.recommended).map((item) => item.operationId)
-                    : spec.endpoints.filter((endpoint) => endpoint.method === "GET").map((endpoint) => endpoint.id));
+            setSpec: (spec, source, prepared) => {
+                const recommended = new Set(spec.endpoints.filter((endpoint) => endpoint.method === "GET").slice(0, MAX_SELECTED_TOOLS).map((endpoint) => endpoint.id));
                 set({
                     spec,
                     specSource: source,
@@ -576,23 +319,25 @@ export const useProjectStore = create<ProjectState>()(
                     autosaveStatus: "idle",
                     lastSavedAt: null,
                     lastSpecDiff: null,
-                    tools: spec.endpoints.map((endpoint) => ({ ...createToolConfig(endpoint), enabled: recommended.has(endpoint.id) })),
+                    tools: prepared?.tools || spec.endpoints.map((endpoint) => ({ ...createToolConfig(endpoint), enabled: recommended.has(endpoint.id) })),
+                    capabilityReport: prepared?.capabilities || null,
+                    endpointWarnings: prepared?.warnings || null,
                     authConfig: inferAuthConfig(spec.securitySchemes),
                     serverConfig: {
                         ...initialState.serverConfig,
                         name: spec.info.title
                             .toLowerCase()
                             .replace(/[^a-z0-9]+/g, "-")
-                            .replace(/(^-|-$)/g, "") || "my-mcp-server",
+                            .replace(/(^-|-$)/g, "").slice(0, 64) || "my-mcp-server",
                     },
                     error: null,
                 });
             },
 
-            regenerateSpec: (nextSpec, source) => {
+            regenerateSpec: (nextSpec, source, prepared) => {
                 const state = get();
                 if (!state.spec) {
-                    state.setSpec(nextSpec, source);
+                    state.setSpec(nextSpec, source, prepared);
                     return null;
                 }
                 const diff = diffSpecs(state.spec, nextSpec);
@@ -601,11 +346,10 @@ export const useProjectStore = create<ProjectState>()(
                     const endpoint = oldEndpointById.get(tool.endpointId);
                     return [endpoint ? `${endpoint.method} ${endpoint.path}` : tool.endpointId, tool] as const;
                 }));
-                const recommended = new Set(nextSpec.apiModel
-                    ? analyzeCapabilities(nextSpec.apiModel).operations.filter((item) => item.recommended).map((item) => item.operationId)
-                    : nextSpec.endpoints.filter((endpoint) => endpoint.method === "GET").map((endpoint) => endpoint.id));
+                const recommended = new Set((prepared?.tools || nextSpec.endpoints.filter((endpoint) => endpoint.method === "GET").slice(0, MAX_SELECTED_TOOLS).map((endpoint) => ({ endpointId: endpoint.id, enabled: true }))).filter((tool) => tool.enabled).map((tool) => tool.endpointId));
+                const freshTools = new Map(prepared?.tools.map((tool) => [tool.endpointId, tool]));
                 const mergedTools = nextSpec.endpoints.map((endpoint) => {
-                    const fresh = createToolConfig(endpoint);
+                    const fresh = freshTools.get(endpoint.id) || createToolConfig(endpoint);
                     const previous = oldToolsByKey.get(`${endpoint.method} ${endpoint.path}`);
                     if (!previous) return { ...fresh, enabled: recommended.has(endpoint.id) };
                     return sanitizeToolConfig({
@@ -619,11 +363,15 @@ export const useProjectStore = create<ProjectState>()(
                         }),
                     });
                 });
+                let selectedCount = 0;
+                for (const tool of mergedTools) if (tool.enabled && ++selectedCount > MAX_SELECTED_TOOLS) tool.enabled = false;
                 set({
                     spec: nextSpec,
                     specSource: source,
                     specFormat: nextSpec.format || "openapi",
                     tools: mergedTools,
+                    capabilityReport: prepared?.capabilities || null,
+                    endpointWarnings: prepared?.warnings || null,
                     authConfig: inferAuthConfig(nextSpec.securitySchemes),
                     lastSpecDiff: diff,
                     error: null,
@@ -646,15 +394,25 @@ export const useProjectStore = create<ProjectState>()(
 
             setCurrentStep: (step) => set({ currentStep: step }),
 
-            toggleTool: (endpointId) => set((state) => ({
-                tools: state.tools.map((t) =>
-                    t.endpointId === endpointId ? { ...t, enabled: !t.enabled } : t
-                ),
-            })),
-
-            toggleAllTools: (enabled) => set((state) => ({
-                tools: state.tools.map((t) => ({ ...t, enabled })),
-            })),
+            toggleTool: (endpointId) => set((state) => {
+                const target = state.tools.find((tool) => tool.endpointId === endpointId);
+                if (!target) return {};
+                if (!target.enabled && state.tools.filter((tool) => tool.enabled).length >= MAX_SELECTED_TOOLS) return { error: "Select at most 500 tools per server. Deselect a tool before adding another." };
+                return { tools: state.tools.map((tool) => tool.endpointId === endpointId ? { ...tool, enabled: !tool.enabled } : tool), error: null };
+            }),
+            setToolsEnabled: (ids, enabled, replace = false) => set((state) => {
+                const selected = new Set(ids);
+                let count = replace ? 0 : state.tools.filter((tool) => tool.enabled && !selected.has(tool.endpointId)).length;
+                const tools = state.tools.map((tool) => {
+                    const desired = selected.has(tool.endpointId) ? enabled : replace ? false : tool.enabled;
+                    if (!selected.has(tool.endpointId) && !replace) return tool;
+                    const next = desired && count < MAX_SELECTED_TOOLS;
+                    if (next) count++;
+                    return tool.enabled === next ? tool : { ...tool, enabled: next };
+                });
+                return { tools, error: enabled && ids.length > MAX_SELECTED_TOOLS ? "Only the first 500 tools were selected. Export additional endpoints in a separate server." : null };
+            }),
+            toggleAllTools: (enabled) => get().setToolsEnabled(get().tools.map((tool) => tool.endpointId), enabled, true),
 
             updateToolConfig: (endpointId, config) => set((state) => ({
                 tools: state.tools.map((t) =>
@@ -690,7 +448,7 @@ export const useProjectStore = create<ProjectState>()(
 
             setProjectName: (name) => set({ projectName: name }),
 
-            saveCurrentProject: (name) => {
+            saveCurrentProject: async (name) => {
                 const state = get();
                 if (!state.spec) return false;
                 const snapshot = snapshotFromState(state);
@@ -715,7 +473,7 @@ export const useProjectStore = create<ProjectState>()(
                 // NOTE: the "makemcp-project-*" key prefix is kept deliberately so
                 // existing users' saved projects survive the mcpmint rebrand.
                 try {
-                    writeProjectSnapshot(project.id, snapshot);
+                    await writeProjectSnapshot(project.id, snapshot);
                 } catch (e) {
                     console.error("Failed to save project:", e);
                     set({ error: "Your download succeeded, but this project could not be saved to browser history. Check private-browsing or storage settings." });
@@ -725,7 +483,7 @@ export const useProjectStore = create<ProjectState>()(
                 const update = upsertProjectHistory(state.savedProjects, project, 50);
                 for (const evicted of update.evicted) {
                     try {
-                        localStorage.removeItem(projectStorageKey(evicted.id));
+                        await removeStored(projectStorageKey(evicted.id));
                     } catch (e) {
                         console.warn("Failed to remove evicted project data:", e);
                     }
@@ -741,15 +499,18 @@ export const useProjectStore = create<ProjectState>()(
                 return true;
             },
 
-            loadProject: (id) => {
+            loadProject: async (id) => {
                 try {
-                    const data = localStorage.getItem(projectStorageKey(id));
+                    const data = await readStored<ProjectSnapshotData>(projectStorageKey(id));
                     if (!data) {
                         set({ error: "This saved project is no longer available. It may have been cleared by the browser." });
                         return false;
                     }
 
-                    const { spec, specSource, specFormat, tools, authConfig, mcpServerAuthConfig, serverConfig, exportConfig } = JSON.parse(data);
+                    const metadata = get().savedProjects.find((candidate) => candidate.id === id);
+                    if (!metadata) throw new Error("Saved project metadata is unavailable.");
+                    const validated = await runProcessing<PortableProjectFile>({ action: "project-validate", project: { kind: "mcpmint-project", schemaVersion: 1, exportedAt: new Date().toISOString(), project: metadata, data } });
+                    const { spec, specSource, specFormat, tools, authConfig, mcpServerAuthConfig, serverConfig, exportConfig } = validated.data;
 
                     // Projects saved before the canonical migration lack
                     // spec.apiModel, which generation now requires.
@@ -768,6 +529,8 @@ export const useProjectStore = create<ProjectState>()(
                         autosaveStatus: "saved",
                         lastSavedAt: project?.savedAt || null,
                         lastSpecDiff: null,
+                        capabilityReport: null,
+                        endpointWarnings: null,
                         tools: Array.isArray(tools) ? tools.map(sanitizeToolConfig) : [],
                         authConfig,
                         mcpServerAuthConfig: normalizeMcpServerAuthConfig(mcpServerAuthConfig),
@@ -800,12 +563,12 @@ export const useProjectStore = create<ProjectState>()(
                 return true;
             },
 
-            deleteProject: (id) => {
+            deleteProject: async (id) => {
                 try {
                     const project = get().savedProjects.find((candidate) => candidate.id === id);
-                    const data = localStorage.getItem(projectStorageKey(id));
+                    const data = await readStored<ProjectSnapshotData>(projectStorageKey(id));
                     if (!project || !data) return;
-                    localStorage.removeItem(projectStorageKey(id));
+                    await removeStored(projectStorageKey(id));
                     set((state) => ({
                         savedProjects: state.savedProjects.filter((candidate) => candidate.id !== id),
                         deletedProject: { project, data },
@@ -821,11 +584,11 @@ export const useProjectStore = create<ProjectState>()(
                 }
             },
 
-            undoDeleteProject: () => {
+            undoDeleteProject: async () => {
                 const deleted = get().deletedProject;
                 if (!deleted) return false;
                 try {
-                    localStorage.setItem(projectStorageKey(deleted.project.id), deleted.data);
+                    await writeStored(projectStorageKey(deleted.project.id), deleted.data);
                     set((state) => ({
                         savedProjects: [deleted.project, ...state.savedProjects.filter((project) => project.id !== deleted.project.id)],
                         deletedProject: null,
@@ -839,38 +602,19 @@ export const useProjectStore = create<ProjectState>()(
                 }
             },
 
-            exportProject: (id) => {
+            exportProject: async (id) => {
                 const state = get();
-                const targetId = id || state.activeProjectId;
-                if (!targetId) {
-                    set({ error: "Save this project before exporting a project file." });
-                    return null;
-                }
-                const project = state.savedProjects.find((candidate) => candidate.id === targetId);
-                const raw = localStorage.getItem(projectStorageKey(targetId));
-                if (!project || !raw) {
-                    set({ error: "This project is no longer available in browser storage." });
-                    return null;
-                }
                 try {
-                    const data = JSON.parse(raw) as ProjectSnapshotData;
-                    const file: PortableProjectFile = {
-                        schemaVersion: 1,
-                        kind: "mcpmint-project",
-                        exportedAt: new Date().toISOString(),
-                        project,
-                        data,
-                    };
-                    return serializeProjectFile(file);
-                } catch {
-                    set({ error: "This saved project is damaged and cannot be exported." });
-                    return null;
-                }
+                    const data = id ? await readStored<ProjectSnapshotData>(projectStorageKey(id)) : snapshotFromState(state);
+                    const project = id ? state.savedProjects.find((candidate) => candidate.id === id) : { id: state.activeProjectId || generateId(), name: state.projectName, source: state.specSource || "unknown", format: state.specFormat || "openapi", endpointCount: state.spec?.endpoints.length || 0, savedAt: Date.now() };
+                    if (!data || !project) throw new Error("This project is no longer available.");
+                    return await runProcessing<string>({ action: "project-export", project: { schemaVersion: 1, kind: "mcpmint-project", exportedAt: new Date().toISOString(), project, data } });
+                } catch (error) { set({ error: error instanceof Error ? error.message : "Could not export project." }); return null; }
             },
 
-            importProject: (text) => {
+            importProject: async (input) => {
                 try {
-                    const file = parseProjectFile(text);
+                    const file = await runProcessing<PortableProjectFile>(typeof input === "string" ? { action: "project-import", content: input } : { action: "project-validate", project: input });
                     const state = get();
                     const existing = state.savedProjects.find((project) =>
                         project.id === file.project.id || project.source === file.project.source
@@ -878,9 +622,10 @@ export const useProjectStore = create<ProjectState>()(
                     const id = existing?.id || file.project.id || generateId();
                     const savedAt = Date.now();
                     const project: SavedProject = { ...file.project, id, savedAt };
-                    writeProjectSnapshot(id, file.data);
+                    let saved = true;
+                    try { await writeProjectSnapshot(id, file.data); } catch { saved = false; }
                     const update = upsertProjectHistory(state.savedProjects, project, 50);
-                    for (const evicted of update.evicted) localStorage.removeItem(projectStorageKey(evicted.id));
+                    for (const evicted of update.evicted) await removeStored(projectStorageKey(evicted.id));
                     set({
                         spec: file.data.spec,
                         specSource: file.data.specSource,
@@ -891,14 +636,16 @@ export const useProjectStore = create<ProjectState>()(
                         serverConfig: file.data.serverConfig,
                         exportConfig: normalizeExportConfig(file.data.exportConfig),
                         currentStep: "editor",
-                        savedProjects: update.projects,
-                        activeProjectId: id,
+                        savedProjects: saved ? update.projects : state.savedProjects,
+                        activeProjectId: saved ? id : null,
                         projectName: project.name,
                         autosaveStatus: "saved",
                         lastSavedAt: savedAt,
                         lastSpecDiff: null,
+                        capabilityReport: null,
+                        endpointWarnings: null,
                         deletedProject: null,
-                        error: null,
+                        error: saved ? null : "Project opened, but browser storage failed. Export a project file before leaving.",
                     });
                     return true;
                 } catch (e) {
@@ -907,20 +654,9 @@ export const useProjectStore = create<ProjectState>()(
                 }
             },
 
-            clearSavedProjects: () => {
-                try {
-                    const keys: string[] = [];
-                    for (let index = 0; index < localStorage.length; index += 1) {
-                        const key = localStorage.key(index);
-                        if (key?.startsWith("makemcp-project-")) keys.push(key);
-                    }
-                    for (const key of keys) localStorage.removeItem(key);
-                } catch (e) {
-                    console.error("Failed to clear project history:", e);
-                    set({ error: "Project history could not be fully cleared. Check your browser storage settings." });
-                    return;
-                }
-
+            clearSavedProjects: async () => {
+                try { for (const project of get().savedProjects) await removeStored(projectStorageKey(project.id)); }
+                catch { set({ error: "Project history could not be fully cleared. Check browser storage settings." }); return; }
                 set({ savedProjects: [], deletedProject: null, activeProjectId: null, autosaveStatus: "idle", lastSavedAt: null, error: null });
             },
 
@@ -936,12 +672,12 @@ export const useProjectStore = create<ProjectState>()(
         {
             // Legacy persist key kept intentionally so existing users' sessions survive the mcpmint rebrand.
             name: "makemcp-storage",
-            storage: createJSONStorage(() => safeLocalStorage),
+            storage: createProjectStorage(),
             // v2: the generator requires spec.apiModel (the canonical path is the
             // only path). Sessions persisted before the canonical migration have a
             // spec without apiModel and would throw deep inside generation, so
             // migrate drops the stale working session and keeps only config/history.
-            version: 3,
+            version: 4,
             migrate: (persistedState, version) => {
                 const persisted = (persistedState as PersistedProjectState | undefined) || {};
 
@@ -987,6 +723,8 @@ export const useProjectStore = create<ProjectState>()(
                 savedProjects: state.savedProjects,
                 exportConfig: state.exportConfig,
                 // In-progress working session so a refresh mid-edit restores the user's work.
+                capabilityReport: state.capabilityReport,
+                endpointWarnings: state.endpointWarnings,
                 spec: state.spec,
                 specSource: state.specSource,
                 specFormat: state.specFormat,
@@ -1003,8 +741,6 @@ export const useProjectStore = create<ProjectState>()(
     )
 );
 
-let projectAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
-
 if (typeof window !== "undefined") {
     useProjectStore.subscribe((state, previous) => {
         const changed = state.spec !== previous.spec
@@ -1017,38 +753,24 @@ if (typeof window !== "undefined") {
             || state.serverConfig !== previous.serverConfig
             || state.exportConfig !== previous.exportConfig;
         if (!changed || !state.activeProjectId || !state.spec) return;
-
+        const id = state.activeProjectId;
+        const snapshot = snapshotFromState(state)!;
         useProjectStore.setState({ autosaveStatus: "saving" });
-        if (projectAutosaveTimer) clearTimeout(projectAutosaveTimer);
-        projectAutosaveTimer = setTimeout(() => {
-            const current = useProjectStore.getState();
-            const snapshot = snapshotFromState(current);
-            if (!snapshot || !current.activeProjectId) return;
-            try {
-                writeProjectSnapshot(current.activeProjectId, snapshot);
-                const savedAt = Date.now();
-                useProjectStore.setState({
-                    savedProjects: current.savedProjects.map((project) => project.id === current.activeProjectId
-                        ? {
-                            ...project,
-                            name: current.projectName.trim() || project.name,
-                            source: snapshot.specSource,
-                            format: snapshot.specFormat,
-                            endpointCount: snapshot.spec.endpoints.length,
-                            savedAt,
-                        }
-                        : project),
-                    autosaveStatus: "saved",
-                    lastSavedAt: savedAt,
-                    error: null,
-                });
-            } catch (error) {
-                console.error("Failed to autosave project:", error);
-                useProjectStore.setState({
-                    autosaveStatus: "error",
-                    error: "Autosave failed. Export a project file before leaving this page.",
-                });
-            }
-        }, 600);
+        void writeProjectSnapshot(id, snapshot).then(() => {
+            const latest = useProjectStore.getState();
+            const stillCurrent = latest.activeProjectId === id && latest.spec === state.spec
+                && latest.tools === state.tools && latest.serverConfig === state.serverConfig
+                && latest.exportConfig === state.exportConfig && latest.authConfig === state.authConfig
+                && latest.mcpServerAuthConfig === state.mcpServerAuthConfig && latest.projectName === state.projectName;
+            const savedAt = Date.now();
+            useProjectStore.setState({
+                savedProjects: latest.savedProjects.map((project) => project.id === id
+                    ? { ...project, name: state.projectName.trim() || project.name, source: snapshot.specSource, format: snapshot.specFormat, endpointCount: snapshot.spec.endpoints.length, savedAt }
+                    : project),
+                ...(stillCurrent ? { autosaveStatus: "saved", lastSavedAt: savedAt } : {}),
+            });
+        }).catch(() => {
+            if (useProjectStore.getState().activeProjectId === id) useProjectStore.setState({ autosaveStatus: "error", error: "Autosave failed. Export a project file before leaving this page." });
+        });
     });
 }

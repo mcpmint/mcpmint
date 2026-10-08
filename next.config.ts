@@ -20,7 +20,10 @@ const contentSecurityPolicy = [
     "font-src 'self' https://cdn.fontshare.com https://api.fontshare.com data:",
     "style-src 'self' 'unsafe-inline' https://api.fontshare.com https://cdn.fontshare.com",
     `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""}`,
-    "connect-src 'self' https://api.fontshare.com https://cdn.fontshare.com",
+    // Live tests are explicitly initiated and enforce the imported base origin in code.
+    // CORS still applies. Local connection checks target loopback development servers.
+    "connect-src 'self' https: http://localhost:* http://127.0.0.1:*",
+    "worker-src 'self'",
     ...(isDevelopment ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");
 

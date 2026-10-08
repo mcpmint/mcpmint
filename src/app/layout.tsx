@@ -65,9 +65,6 @@ export const metadata: Metadata = {
       "max-snippet": -1,
     },
   },
-  alternates: {
-    canonical: SITE_URL,
-  },
 };
 
 export default function RootLayout({
@@ -91,7 +88,7 @@ export default function RootLayout({
         <ThemeProvider defaultTheme="dark" storageKey="makemcp-theme">
           {children}
         </ThemeProvider>
-        <Analytics />
+        {process.env.VERCEL === "1" && <Analytics />}
       </body>
     </html>
   );

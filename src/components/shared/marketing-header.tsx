@@ -20,9 +20,7 @@ export function MarketingHeader() {
 
         <nav aria-label="Homepage" className="flex items-center gap-1 sm:gap-3">
           <Link
-            href="https://github.com/mcpmint/mcpmint#readme"
-            target="_blank"
-            rel="noreferrer"
+            href="/docs"
             className="hidden px-2 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground sm:block"
           >
             Documentation

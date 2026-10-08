@@ -2,7 +2,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ArrowLeft, Search, CheckSquare, Square, ChevronDown, AlertTriangle, X, Layers, FileUp, ShieldCheck } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowLeft,
+  Search,
+  CheckSquare,
+  Square,
+  ChevronDown,
+  AlertTriangle,
+  X,
+  Layers,
+  FileUp,
+  ShieldCheck,
+} from "lucide-react";
 import { Header } from "@/components/shared/header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,29 +23,42 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useProjectStore, ParsedEndpoint } from "@/store/project-store";
 import {
-  buildEndpointWarnings,
   consumeValidationSummary,
   type ValidationSummary,
-} from "@/lib/parsers/openapi";
-import type { ValidationMessage } from "@/lib/parsers/openapi";
+} from "@/lib/parsers/validation";
+import type { ValidationMessage } from "@/lib/parsers/validation";
 import {
   estimateToolDefinitionTokens,
   estimateCompactModeTokens,
   formatTokens,
   type BudgetBand,
 } from "@/lib/token-estimate";
-import { analyzeCapabilities, selectOperationIds, type SelectionPreset } from "@/lib/capabilities";
-import { parseOpenAPIFromContent } from "@/lib/parsers/openapi";
+import { selectOperationIds, type SelectionPreset } from "@/lib/capabilities";
+import { useProcessing } from "@/hooks/use-processing";
+import type { PreparedImport } from "@/lib/processing/types";
+import { useHydratedProject } from "@/hooks/use-hydrated-project";
+import { ProcessingOverlay } from "@/components/shared/processing-overlay";
 
 export default function EditorPage() {
   const router = useRouter();
+  const hydrated = useHydratedProject();
+  const processing = useProcessing();
+  const { run } = processing;
+  const [page, setPage] = useState(0);
   const {
     spec,
     tools,
     toggleTool,
+    setToolsEnabled,
+    capabilityReport,
+    endpointWarnings: savedWarnings,
     updateToolConfig,
     setCurrentStep,
     exportConfig,
@@ -46,26 +71,30 @@ export default function EditorPage() {
   const compactMode = exportConfig.compactMode;
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedMethodFilters, setSelectedMethodFilters] = useState<string[]>([]);
+  const [selectedMethodFilters, setSelectedMethodFilters] = useState<string[]>(
+    [],
+  );
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // Pick up the one-time validation summary stashed by the import step. Lazy
   // initializer so the read-and-clear happens exactly once on mount (guarded
   // against SSR inside consumeValidationSummary).
-  const [validationSummary] = useState<ValidationSummary | null>(() => consumeValidationSummary());
+  const [validationSummary] = useState<ValidationSummary | null>(() =>
+    consumeValidationSummary(),
+  );
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const regenerateInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!spec) router.push("/");
-  }, [spec, router]);
+    if (hydrated && !spec) router.replace("/import");
+  }, [spec, router, hydrated]);
 
   // Index per-endpoint validation warnings ("METHOD /path" -> messages).
   // Recomputed only when the spec changes, so it's cheap during interaction.
   const endpointWarnings = useMemo(
-    () => (spec ? buildEndpointWarnings(spec) : new Map<string, ValidationMessage[]>()),
-    [spec]
+    () => new Map<string, ValidationMessage[]>(savedWarnings || []),
+    [savedWarnings],
   );
 
   // Live context-budget estimate. In compact mode the model only ever sees the
@@ -73,15 +102,57 @@ export default function EditorPage() {
   // endpoints are enabled — we swap in the compact estimate. Otherwise it is
   // the sum of every enabled tool's definition. Recomputes whenever a tool
   // toggles or its config changes, since `tools` is a fresh array each time.
-  const fullBudget = useMemo(() => estimateToolDefinitionTokens(tools), [tools]);
+  const fullBudget = useMemo(
+    () => estimateToolDefinitionTokens(tools),
+    [tools],
+  );
   const compactBudget = useMemo(
     () => estimateCompactModeTokens(fullBudget.enabledCount),
-    [fullBudget.enabledCount]
+    [fullBudget.enabledCount],
   );
   const budget = compactMode ? compactBudget : fullBudget;
-  const capabilityReport = useMemo(() => spec?.apiModel ? analyzeCapabilities(spec.apiModel) : null, [spec]);
+  useEffect(() => {
+    if (!hydrated || !spec || capabilityReport) return;
+    let active = true;
+    run<import("@/lib/processing/types").PreparedAnalysis>({
+      action: "capabilities",
+      spec,
+    })
+      .then((report) => {
+        if (active && useProjectStore.getState().spec === spec)
+          useProjectStore.setState({
+            capabilityReport: report.capabilities,
+            endpointWarnings: report.warnings,
+          });
+      })
+      .catch((error) => {
+        if (active) setError(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [hydrated, spec, capabilityReport, run, setError]);
+  const capabilitiesById = useMemo(
+    () =>
+      new Map(
+        capabilityReport?.operations.map((operation) => [
+          operation.operationId,
+          operation,
+        ]) || [],
+      ),
+    [capabilityReport],
+  );
+  const toolsById = useMemo(
+    () => new Map(tools.map((tool) => [tool.endpointId, tool])),
+    [tools],
+  );
 
-  if (!spec) return null;
+  if (!hydrated || !spec)
+    return (
+      <div role="status" className="p-8">
+        Restoring your project…
+      </div>
+    );
 
   const filteredEndpoints = spec.endpoints.filter((ep) => {
     const matchesSearch =
@@ -90,55 +161,86 @@ export default function EditorPage() {
       ep.summary?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       ep.operationId?.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesMethod =
-      selectedMethodFilters.length === 0 || selectedMethodFilters.includes(ep.method);
+      selectedMethodFilters.length === 0 ||
+      selectedMethodFilters.includes(ep.method);
     const matchesTag = !selectedTag || (ep.tags || []).includes(selectedTag);
     return matchesSearch && matchesMethod && matchesTag;
   });
-  const availableTags = [...new Set(spec.endpoints.flatMap((endpoint) => endpoint.tags || []))].sort();
-  const groupedEndpoints = [...filteredEndpoints].sort((left, right) =>
-    (left.tags?.[0] || "Untagged").localeCompare(right.tags?.[0] || "Untagged")
-    || left.path.localeCompare(right.path));
+  const availableTags = [
+    ...new Set(spec.endpoints.flatMap((endpoint) => endpoint.tags || [])),
+  ].sort();
+  const groupedEndpoints = [...filteredEndpoints].sort(
+    (left, right) =>
+      (left.tags?.[0] || "Untagged").localeCompare(
+        right.tags?.[0] || "Untagged",
+      ) || left.path.localeCompare(right.path),
+  );
 
+  const pageCount = Math.max(1, Math.ceil(groupedEndpoints.length / 100));
+  const currentPage = Math.min(page, pageCount - 1);
+  const displayedEndpoints = groupedEndpoints.slice(
+    currentPage * 100,
+    (currentPage + 1) * 100,
+  );
   const selectedCount = tools.filter((t) => t.enabled).length;
-  const visibleToolIds = new Set(filteredEndpoints.map((endpoint) => endpoint.id));
-  const visibleTools = tools.filter((tool) => visibleToolIds.has(tool.endpointId));
-  const allVisibleSelected = visibleTools.length > 0 && visibleTools.every((tool) => tool.enabled);
+  const visibleToolIds = new Set(
+    filteredEndpoints.map((endpoint) => endpoint.id),
+  );
+  const visibleTools = tools.filter((tool) =>
+    visibleToolIds.has(tool.endpointId),
+  );
+  const allVisibleSelected =
+    visibleTools.length > 0 && visibleTools.every((tool) => tool.enabled);
 
   const toggleMethodFilter = (m: string) =>
     setSelectedMethodFilters((prev) =>
-      prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
+      prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m],
     );
 
   const toggleVisibleTools = (enabled: boolean) => {
-    for (const tool of visibleTools) {
-      if (tool.enabled !== enabled) toggleTool(tool.endpointId);
-    }
+    setToolsEnabled(
+      visibleTools.map((tool) => tool.endpointId),
+      enabled,
+    );
   };
 
   const applyPreset = (preset: SelectionPreset) => {
     if (!capabilityReport) return;
     const selected = selectOperationIds(capabilityReport, preset);
-    for (const tool of tools) {
-      const shouldEnable = selected.has(tool.endpointId);
-      if (tool.enabled !== shouldEnable) toggleTool(tool.endpointId);
-    }
+    setToolsEnabled([...selected], true, true);
     if (preset === "recommended") setExportConfig({ compactMode: false });
-    if (preset === "all-supported" && capabilityReport.operations.length > 25) setExportConfig({ compactMode: true });
+    if (preset === "all-supported" && capabilityReport.operations.length > 25)
+      setExportConfig({ compactMode: true });
   };
 
   const handleRegenerate = async (file: File | undefined) => {
     if (!file) return;
     try {
-      const parsed = await parseOpenAPIFromContent(await file.text(), file.name);
-      regenerateSpec(parsed, file.name);
+      setError(null);
+      const prepared = await processing.run<PreparedImport>({
+        action: "parse",
+        file,
+        filename: file.name,
+      });
+      regenerateSpec(prepared.spec, file.name, prepared);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not import the updated specification.");
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not import the updated specification.",
+      );
     }
   };
 
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
+      {processing.isProcessing && (
+        <ProcessingOverlay
+          stage={processing.stage}
+          cancel={processing.cancel}
+        />
+      )}
 
       <main className="pt-14 flex-1 flex flex-col relative z-10">
         {/* Validation summary banner (one-time, from the import step) */}
@@ -163,11 +265,16 @@ export default function EditorPage() {
                 }`}
               />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold">{validationSummary.headline}</p>
+                <p className="text-xs font-semibold">
+                  {validationSummary.headline}
+                </p>
                 {validationSummary.notable.length > 0 && (
                   <ul className="mt-1 space-y-0.5">
                     {validationSummary.notable.map((item, i) => (
-                      <li key={i} className="text-[11px] text-muted-foreground truncate">
+                      <li
+                        key={i}
+                        className="text-[11px] text-muted-foreground truncate"
+                      >
                         · {item}
                       </li>
                     ))}
@@ -190,13 +297,29 @@ export default function EditorPage() {
             <div className="mx-auto max-w-[1400px] px-3 py-3 sm:px-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold">Spec regenerated · v{lastSpecDiff.oldVersion || "?"} → v{lastSpecDiff.newVersion || "?"}</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">{lastSpecDiff.added} added · {lastSpecDiff.changed} changed · {lastSpecDiff.removed} removed · existing names and selections preserved by method + path</p>
+                  <p className="text-xs font-semibold">
+                    Spec regenerated · v{lastSpecDiff.oldVersion || "?"} → v
+                    {lastSpecDiff.newVersion || "?"}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {lastSpecDiff.added} added · {lastSpecDiff.changed} changed
+                    · {lastSpecDiff.removed} removed · existing names and
+                    selections preserved by method + path
+                  </p>
                 </div>
                 <details className="text-[11px]">
-                  <summary className="cursor-pointer uppercase tracking-wider text-primary">Review drift</summary>
+                  <summary className="cursor-pointer uppercase tracking-wider text-primary">
+                    Review drift
+                  </summary>
                   <ul className="mt-2 max-h-40 min-w-[280px] space-y-1 overflow-auto border border-border bg-background p-3">
-                    {lastSpecDiff.changes.map((change) => <li key={`${change.kind}-${change.key}`}><span className="uppercase text-muted-foreground">{change.kind}</span> · {change.key}: {change.details.join("; ")}</li>)}
+                    {lastSpecDiff.changes.map((change) => (
+                      <li key={`${change.kind}-${change.key}`}>
+                        <span className="uppercase text-muted-foreground">
+                          {change.kind}
+                        </span>{" "}
+                        · {change.key}: {change.details.join("; ")}
+                      </li>
+                    ))}
                   </ul>
                 </details>
               </div>
@@ -207,30 +330,105 @@ export default function EditorPage() {
         {capabilityReport && (
           <div className="border-b border-border bg-background">
             <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-2 px-3 py-2 sm:px-6">
-              <button type="button" onClick={() => setShowCapabilities((value) => !value)} aria-expanded={showCapabilities} className="mr-auto flex min-h-9 items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground hover:text-primary">
-                <ShieldCheck className="size-3.5" /> Capability report · {capabilityReport.supported} ready · {capabilityReport.manualReview} review · {capabilityReport.unsupported} unsupported
+              <button
+                type="button"
+                onClick={() => setShowCapabilities((value) => !value)}
+                aria-expanded={showCapabilities}
+                className="mr-auto flex min-h-9 items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground hover:text-primary"
+              >
+                <ShieldCheck className="size-3.5" /> Capability report ·{" "}
+                {capabilityReport.supported} ready ·{" "}
+                {capabilityReport.manualReview} review ·{" "}
+                {capabilityReport.unsupported} unsupported
               </button>
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Presets</span>
-              {([
-                ["recommended", "Recommended"], ["read-only", "Read only"], ["crud", "CRUD"], ["all-supported", "All supported"], ["none", "None"],
-              ] as [SelectionPreset, string][]).map(([value, label]) => (
-                <button key={value} type="button" onClick={() => applyPreset(value)} className="min-h-9 border border-border px-2.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:border-primary/40 hover:text-primary">{label}</button>
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
+                Presets
+              </span>
+              {(
+                [
+                  ["recommended", "Recommended"],
+                  ["read-only", "Read only"],
+                  ["crud", "CRUD"],
+                  ["all-supported", "All supported"],
+                  ["none", "None"],
+                ] as [SelectionPreset, string][]
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => applyPreset(value)}
+                  className="min-h-9 border border-border px-2.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:border-primary/40 hover:text-primary"
+                >
+                  {label}
+                </button>
               ))}
-              <input ref={regenerateInput} type="file" accept=".json,.yaml,.yml,application/json,application/yaml" className="sr-only" onChange={(event) => { void handleRegenerate(event.target.files?.[0]); event.target.value = ""; }} />
-              <button type="button" onClick={() => regenerateInput.current?.click()} className="flex min-h-9 items-center gap-1.5 border border-primary/40 px-2.5 text-[10px] uppercase tracking-wider text-primary hover:bg-primary/10"><FileUp className="size-3.5" /> Update spec</button>
+              <input
+                ref={regenerateInput}
+                type="file"
+                accept=".json,.yaml,.yml,application/json,application/yaml"
+                className="sr-only"
+                onChange={(event) => {
+                  void handleRegenerate(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => regenerateInput.current?.click()}
+                className="flex min-h-9 items-center gap-1.5 border border-primary/40 px-2.5 text-[10px] uppercase tracking-wider text-primary hover:bg-primary/10"
+              >
+                <FileUp className="size-3.5" /> Update spec
+              </button>
             </div>
             {showCapabilities && (
               <div className="mx-auto max-w-[1400px] px-3 pb-3 sm:px-6">
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Showing up to 100 operations that need attention. Every
+                  operation remains available in the paginated endpoint list.
+                </p>
                 <div className="max-h-64 overflow-auto border border-border">
-                  {capabilityReport.operations.filter((item) => item.status !== "supported" || item.risk === "high").map((item) => (
-                    <div key={item.operationId} className="grid gap-1 border-b border-border px-3 py-2 text-[11px] last:border-b-0 md:grid-cols-[90px_1fr_120px_1fr]">
-                      <span className={item.status === "unsupported" ? "text-red" : item.status === "manual-review" ? "text-amber" : "text-muted-foreground"}>{item.status}</span>
-                      <code>{item.method} {item.path}</code>
-                      <span>{item.risk} risk · {item.auth} auth</span>
-                      <span className="text-muted-foreground">{item.reasons.join("; ") || "Destructive operation; select intentionally."}</span>
-                    </div>
-                  ))}
-                  {capabilityReport.operations.every((item) => item.status === "supported" && item.risk !== "high") && <p className="p-3 text-xs text-muted-foreground">Every operation is supported with no high-risk items.</p>}
+                  {capabilityReport.operations
+                    .filter(
+                      (item) =>
+                        item.status !== "supported" || item.risk === "high",
+                    )
+                    .slice(0, 100)
+                    .map((item) => (
+                      <div
+                        key={item.operationId}
+                        className="grid gap-1 border-b border-border px-3 py-2 text-[11px] last:border-b-0 md:grid-cols-[90px_1fr_120px_1fr]"
+                      >
+                        <span
+                          className={
+                            item.status === "unsupported"
+                              ? "text-red"
+                              : item.status === "manual-review"
+                                ? "text-amber"
+                                : "text-muted-foreground"
+                          }
+                        >
+                          {item.status}
+                        </span>
+                        <code>
+                          {item.method} {item.path}
+                        </code>
+                        <span>
+                          {item.risk} risk · {item.auth} auth
+                        </span>
+                        <span className="text-muted-foreground">
+                          {item.reasons.join("; ") ||
+                            "Destructive operation; select intentionally."}
+                        </span>
+                      </div>
+                    ))}
+                  {capabilityReport.operations.every(
+                    (item) =>
+                      item.status === "supported" && item.risk !== "high",
+                  ) && (
+                    <p className="p-3 text-xs text-muted-foreground">
+                      Every operation is supported with no high-risk items.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -261,9 +459,10 @@ export default function EditorPage() {
                   aria-pressed={selectedMethodFilters.includes(m)}
                   className={`
                     min-h-11 sm:min-h-0 px-2.5 py-1 text-[10px] font-semibold tracking-wider transition-all
-                    ${selectedMethodFilters.includes(m)
-                      ? getMethodClasses(m as ParsedEndpoint["method"])
-                      : "text-muted-foreground hover:text-foreground bg-transparent border border-transparent hover:border-border"
+                    ${
+                      selectedMethodFilters.includes(m)
+                        ? getMethodClasses(m as ParsedEndpoint["method"])
+                        : "text-muted-foreground hover:text-foreground bg-transparent border border-transparent hover:border-border"
                     }
                   `}
                 >
@@ -273,9 +472,29 @@ export default function EditorPage() {
             </div>
 
             {availableTags.length > 0 && (
-              <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:pb-0" aria-label="Filter endpoints by tag">
-                <button type="button" onClick={() => setSelectedTag(null)} aria-pressed={selectedTag === null} className={`min-h-9 px-2 text-[10px] uppercase tracking-wider ${selectedTag === null ? "border border-primary text-primary" : "border border-transparent text-muted-foreground hover:text-foreground"}`}>All tags</button>
-                {availableTags.map((tag) => <button key={tag} type="button" onClick={() => setSelectedTag(tag)} aria-pressed={selectedTag === tag} className={`min-h-9 whitespace-nowrap px-2 text-[10px] uppercase tracking-wider ${selectedTag === tag ? "border border-primary text-primary" : "border border-transparent text-muted-foreground hover:text-foreground"}`}>{tag}</button>)}
+              <div
+                className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:pb-0"
+                aria-label="Filter endpoints by tag"
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedTag(null)}
+                  aria-pressed={selectedTag === null}
+                  className={`min-h-9 px-2 text-[10px] uppercase tracking-wider ${selectedTag === null ? "border border-primary text-primary" : "border border-transparent text-muted-foreground hover:text-foreground"}`}
+                >
+                  All tags
+                </button>
+                {availableTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setSelectedTag(tag)}
+                    aria-pressed={selectedTag === tag}
+                    className={`min-h-9 whitespace-nowrap px-2 text-[10px] uppercase tracking-wider ${selectedTag === tag ? "border border-primary text-primary" : "border border-transparent text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {tag}
+                  </button>
+                ))}
               </div>
             )}
 
@@ -285,7 +504,11 @@ export default function EditorPage() {
               disabled={visibleTools.length === 0}
               className="min-h-11 sm:min-h-0 px-2 flex items-center gap-1.5 text-[11px] tracking-wider text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
             >
-              {allVisibleSelected ? <Square className="w-3.5 h-3.5" /> : <CheckSquare className="w-3.5 h-3.5" />}
+              {allVisibleSelected ? (
+                <Square className="w-3.5 h-3.5" />
+              ) : (
+                <CheckSquare className="w-3.5 h-3.5" />
+              )}
               {allVisibleSelected ? "NONE VISIBLE" : "ALL VISIBLE"}
             </button>
           </div>
@@ -308,22 +531,59 @@ export default function EditorPage() {
         {/* Endpoint rows */}
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-[1400px] mx-auto px-3 sm:px-6">
-            {groupedEndpoints.map((ep, endpointIndex) => {
-              const tool = tools.find((t) => t.endpointId === ep.id);
+            {pageCount > 1 && (
+              <nav
+                aria-label="Endpoint pages"
+                className="flex items-center gap-4 p-4"
+              >
+                <Button
+                  variant="outline"
+                  disabled={currentPage === 0}
+                  onClick={() => setPage(currentPage - 1)}
+                >
+                  Previous
+                </Button>
+                <span>
+                  Page {currentPage + 1} of {pageCount} · 100 endpoints per page
+                </span>
+                <Button
+                  variant="outline"
+                  disabled={currentPage + 1 >= pageCount}
+                  onClick={() => setPage(currentPage + 1)}
+                >
+                  Next
+                </Button>
+              </nav>
+            )}
+            {displayedEndpoints.map((ep, endpointIndex) => {
+              const tool = toolsById.get(ep.id);
               if (!tool) return null;
               const isExpanded = expandedId === ep.id;
-              const visibleParamCount = tool.parameters.filter((param) => !param.hidden).length;
-              const warnings = endpointWarnings.get(`${ep.method} ${ep.path}`) ?? [];
-              const capability = capabilityReport?.operations.find((item) => item.operationId === ep.id);
+              const visibleParamCount = tool.parameters.filter(
+                (param) => !param.hidden,
+              ).length;
+              const warnings =
+                endpointWarnings.get(`${ep.method} ${ep.path}`) ?? [];
+              const capability = capabilitiesById.get(ep.id);
               const domId = ep.id.replace(/[^a-zA-Z0-9_-]+/g, "-");
               const groupName = ep.tags?.[0] || "Untagged";
-              const previousGroup = endpointIndex > 0 ? groupedEndpoints[endpointIndex - 1].tags?.[0] || "Untagged" : null;
+              const previousGroup =
+                endpointIndex > 0
+                  ? displayedEndpoints[endpointIndex - 1].tags?.[0] ||
+                    "Untagged"
+                  : null;
 
               return (
                 <div key={ep.id} className="border-b border-border">
                   {groupName !== previousGroup && (
                     <div className="border-b border-border bg-surface/60 px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                      {groupName} · {groupedEndpoints.filter((candidate) => (candidate.tags?.[0] || "Untagged") === groupName).length}
+                      {groupName} ·{" "}
+                      {
+                        groupedEndpoints.filter(
+                          (candidate) =>
+                            (candidate.tags?.[0] || "Untagged") === groupName,
+                        ).length
+                      }
                     </div>
                   )}
                   {/* Row */}
@@ -360,7 +620,9 @@ export default function EditorPage() {
                     </div>
 
                     {/* Method */}
-                    <Badge className={`${getMethodClasses(ep.method)} text-[10px] font-bold tracking-wider w-fit`}>
+                    <Badge
+                      className={`${getMethodClasses(ep.method)} text-[10px] font-bold tracking-wider w-fit`}
+                    >
                       {ep.method}
                     </Badge>
 
@@ -385,7 +647,10 @@ export default function EditorPage() {
                             <TooltipContent className="max-w-xs text-left">
                               <ul className="space-y-1">
                                 {warnings.map((w, i) => (
-                                  <li key={i} className="text-[11px] leading-snug">
+                                  <li
+                                    key={i}
+                                    className="text-[11px] leading-snug"
+                                  >
                                     {w.message}
                                   </li>
                                 ))}
@@ -399,24 +664,34 @@ export default function EditorPage() {
                           {ep.summary}
                         </span>
                       )}
-                      {capability && (capability.status !== "supported" || capability.risk === "high") && (
-                        <span className={`mt-1 inline-block text-[9px] uppercase tracking-wider ${capability.status === "manual-review" ? "text-amber" : capability.status === "unsupported" ? "text-red" : "text-muted-foreground"}`}>
-                          {capability.status === "supported" ? capability.risk : capability.status}
-                        </span>
-                      )}
+                      {capability &&
+                        (capability.status !== "supported" ||
+                          capability.risk === "high") && (
+                          <span
+                            className={`mt-1 inline-block text-[9px] uppercase tracking-wider ${capability.status === "manual-review" ? "text-amber" : capability.status === "unsupported" ? "text-red" : "text-muted-foreground"}`}
+                          >
+                            {capability.status === "supported"
+                              ? capability.risk
+                              : capability.status}
+                          </span>
+                        )}
                       <span className="md:hidden text-[10px] text-muted-foreground truncate block mt-1">
-                        {tool.toolName} · {visibleParamCount} param{visibleParamCount !== 1 ? "s" : ""}
+                        {tool.toolName} · {visibleParamCount} param
+                        {visibleParamCount !== 1 ? "s" : ""}
                       </span>
                     </div>
 
                     {/* Tool name */}
-                    <code className={`hidden md:block text-[11px] truncate ${tool.enabled ? "text-primary" : "text-muted-foreground"}`}>
+                    <code
+                      className={`hidden md:block text-[11px] truncate ${tool.enabled ? "text-primary" : "text-muted-foreground"}`}
+                    >
                       {tool.toolName}
                     </code>
 
                     {/* Params */}
                     <span className="hidden md:block text-[11px] text-muted-foreground">
-                      {visibleParamCount} param{visibleParamCount !== 1 ? "s" : ""}
+                      {visibleParamCount} param
+                      {visibleParamCount !== 1 ? "s" : ""}
                     </span>
 
                     {/* Expand arrow */}
@@ -429,31 +704,48 @@ export default function EditorPage() {
 
                   {/* Inline expansion */}
                   {isExpanded && (
-                    <div id={`endpoint-details-${domId}`} className="animate-expand bg-surface border-t border-border px-3 sm:px-6 py-5">
+                    <div
+                      id={`endpoint-details-${domId}`}
+                      className="animate-expand bg-surface border-t border-border px-3 sm:px-6 py-5"
+                    >
                       <div className="grid md:grid-cols-2 gap-6 max-w-3xl">
                         {/* Tool Name */}
                         <div className="space-y-1.5">
-                          <Label htmlFor={`tool-name-${domId}`} className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
+                          <Label
+                            htmlFor={`tool-name-${domId}`}
+                            className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                          >
                             Tool Name
                           </Label>
                           <Input
                             id={`tool-name-${domId}`}
                             value={tool.toolName}
-                            onChange={(e) => updateToolConfig(ep.id, { toolName: e.target.value })}
+                            onChange={(e) =>
+                              updateToolConfig(ep.id, {
+                                toolName: e.target.value,
+                              })
+                            }
                             className="h-8 bg-background border-border text-xs focus:border-primary"
                           />
                         </div>
 
                         {/* Enable */}
                         <div className="space-y-1.5">
-                          <Label htmlFor={`tool-description-${domId}`} className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
+                          <Label
+                            htmlFor={`tool-description-${domId}`}
+                            className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                          >
                             Status
                           </Label>
                           <Button
                             variant={tool.enabled ? "default" : "outline"}
                             size="sm"
                             className={`w-full text-xs ${tool.enabled ? "bg-primary text-primary-foreground" : "border-border"}`}
-                            onClick={() => updateToolConfig(ep.id, { enabled: !tool.enabled })}
+                            onClick={() =>
+                              updateToolConfig(ep.id, {
+                                enabled: !tool.enabled,
+                              })
+                            }
                           >
                             {tool.enabled ? "Enabled" : "Disabled"}
                           </Button>
@@ -467,7 +759,11 @@ export default function EditorPage() {
                           <Textarea
                             id={`tool-description-${domId}`}
                             value={tool.description}
-                            onChange={(e) => updateToolConfig(ep.id, { description: e.target.value })}
+                            onChange={(e) =>
+                              updateToolConfig(ep.id, {
+                                description: e.target.value,
+                              })
+                            }
                             className="min-h-[60px] bg-background border-border text-xs resize-none focus:border-primary"
                           />
                         </div>
@@ -480,7 +776,10 @@ export default function EditorPage() {
                             </Label>
                             <div className="space-y-2 max-h-[250px] overflow-y-auto">
                               {tool.parameters.map((param, idx) => (
-                                <div key={`${param.originalName}-${idx}`} className="flex flex-wrap sm:flex-nowrap items-center gap-3 py-2 border-b border-border last:border-0">
+                                <div
+                                  key={`${param.originalName}-${idx}`}
+                                  className="flex flex-wrap sm:flex-nowrap items-center gap-3 py-2 border-b border-border last:border-0"
+                                >
                                   <Badge
                                     variant="outline"
                                     className={`text-[9px] w-12 justify-center ${getLocationClasses(param.location)}`}
@@ -492,23 +791,37 @@ export default function EditorPage() {
                                     value={param.name}
                                     onChange={(e) => {
                                       const newParams = [...tool.parameters];
-                                      newParams[idx] = { ...param, name: e.target.value };
-                                      updateToolConfig(ep.id, { parameters: newParams });
+                                      newParams[idx] = {
+                                        ...param,
+                                        name: e.target.value,
+                                      };
+                                      updateToolConfig(ep.id, {
+                                        parameters: newParams,
+                                      });
                                     }}
                                     disabled={param.hidden}
                                     className="h-9 w-32 bg-background border-border text-[11px] focus:border-primary"
                                   />
-                                  <span className="text-[10px] text-muted-foreground">{param.type}</span>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {param.type}
+                                  </span>
                                   {param.required && (
-                                    <span className="text-[9px] text-amber tracking-wider uppercase">req</span>
+                                    <span className="text-[9px] text-amber tracking-wider uppercase">
+                                      req
+                                    </span>
                                   )}
                                   <Input
                                     aria-label={`Description for parameter ${param.originalName}`}
                                     value={param.description}
                                     onChange={(e) => {
                                       const newParams = [...tool.parameters];
-                                      newParams[idx] = { ...param, description: e.target.value };
-                                      updateToolConfig(ep.id, { parameters: newParams });
+                                      newParams[idx] = {
+                                        ...param,
+                                        description: e.target.value,
+                                      };
+                                      updateToolConfig(ep.id, {
+                                        parameters: newParams,
+                                      });
                                     }}
                                     disabled={param.hidden}
                                     className="h-9 min-w-full sm:min-w-0 flex-1 bg-background border-border text-[11px] focus:border-primary"
@@ -517,11 +830,19 @@ export default function EditorPage() {
                                   <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground whitespace-nowrap">
                                     <Checkbox
                                       checked={!param.hidden}
-                                      disabled={param.location === "path" && param.required}
+                                      disabled={
+                                        param.location === "path" &&
+                                        param.required
+                                      }
                                       onCheckedChange={(checked) => {
                                         const newParams = [...tool.parameters];
-                                        newParams[idx] = { ...param, hidden: !checked };
-                                        updateToolConfig(ep.id, { parameters: newParams });
+                                        newParams[idx] = {
+                                          ...param,
+                                          hidden: !checked,
+                                        };
+                                        updateToolConfig(ep.id, {
+                                          parameters: newParams,
+                                        });
                                       }}
                                     />
                                     Use
@@ -551,7 +872,10 @@ export default function EditorPage() {
           <div className="max-w-[1400px] mx-auto px-3 sm:px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <Button
               variant="ghost"
-              onClick={() => { setCurrentStep("import"); router.push("/import"); }}
+              onClick={() => {
+                setCurrentStep("import");
+                router.push("/import");
+              }}
               className="text-xs text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="w-3.5 h-3.5 mr-2" />
@@ -575,7 +899,9 @@ export default function EditorPage() {
                     </span>
                     <Switch
                       checked={compactMode}
-                      onCheckedChange={(checked) => setExportConfig({ compactMode: checked })}
+                      onCheckedChange={(checked) =>
+                        setExportConfig({ compactMode: checked })
+                      }
                       aria-label="Compact mode"
                       className="ml-0.5"
                     />
@@ -583,14 +909,16 @@ export default function EditorPage() {
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs text-left">
                   <p className="text-[11px] leading-snug">
-                    Compact mode exposes just 3 meta-tools
-                    (<code>list_api_endpoints</code>, <code>get_api_endpoint_schema</code>,{" "}
-                    <code>invoke_api_endpoint</code>) instead of one tool per operation.
+                    Compact mode exposes just 3 meta-tools (
+                    <code>list_api_endpoints</code>,{" "}
+                    <code>get_api_endpoint_schema</code>,{" "}
+                    <code>invoke_api_endpoint</code>) instead of one tool per
+                    operation.
                   </p>
                   <p className="text-[10px] leading-snug mt-1.5 opacity-70">
-                    The model discovers and calls endpoints on demand, so a large API
-                    costs a tiny, constant amount of context instead of ballooning with
-                    every enabled tool.
+                    The model discovers and calls endpoints on demand, so a
+                    large API costs a tiny, constant amount of context instead
+                    of ballooning with every enabled tool.
                   </p>
                 </TooltipContent>
               </Tooltip>
@@ -631,35 +959,43 @@ export default function EditorPage() {
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs text-left">
                   <p className="text-[11px] leading-snug">
-                    Roughly how much of the model&apos;s context window your tool list
-                    occupies before any real work. Fewer, well-described tools = better
-                    agent accuracy.
+                    Roughly how much of the model&apos;s context window your
+                    tool list occupies before any real work. Fewer,
+                    well-described tools = better agent accuracy.
                   </p>
                   {compactMode ? (
                     <p className="text-[10px] leading-snug mt-1.5 opacity-70">
                       Compact mode is on: just 3 meta-tools reach all{" "}
                       {budget.enabledCount} enabled endpoint
-                      {budget.enabledCount !== 1 ? "s" : ""} on demand (~1 token / 4 chars
-                      of tool JSON).
+                      {budget.enabledCount !== 1 ? "s" : ""} on demand (~1 token
+                      / 4 chars of tool JSON).
                     </p>
                   ) : (
                     <p className="text-[10px] leading-snug mt-1.5 opacity-70">
                       Estimated across {budget.enabledCount} enabled tool
-                      {budget.enabledCount !== 1 ? "s" : ""} (~1 token / 4 chars of tool JSON).
+                      {budget.enabledCount !== 1 ? "s" : ""} (~1 token / 4 chars
+                      of tool JSON).
                     </p>
                   )}
                 </TooltipContent>
               </Tooltip>
 
               <span className="text-xs text-muted-foreground">
-                <span className="text-primary font-semibold">{selectedCount}</span>
+                <span className="text-primary font-semibold">
+                  {selectedCount}
+                </span>
                 <span className="mx-1">/</span>
                 <span>{tools.length}</span>
-                <span className="ml-1.5 tracking-wider uppercase text-[10px]">selected</span>
+                <span className="ml-1.5 tracking-wider uppercase text-[10px]">
+                  selected
+                </span>
               </span>
 
               <Button
-                onClick={() => { setCurrentStep("export"); router.push("/export"); }}
+                onClick={() => {
+                  setCurrentStep("export");
+                  router.push("/export");
+                }}
                 disabled={selectedCount === 0}
                 className="min-h-11 basis-full sm:basis-auto sm:flex-none bg-primary text-primary-foreground hover:bg-primary/90 px-8 font-semibold text-xs tracking-wider"
               >

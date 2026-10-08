@@ -15,10 +15,14 @@ test("the public generation route stays outside process-spawning verification", 
     assert.doesNotMatch(server, /from ["']\.\/verify|node:child_process/);
 });
 
-test("browser archives use asynchronous compression", () => {
-    const clientGenerator = readFileSync(join(directory, "../client-generate.ts"), "utf8");
-
-    assert.match(clientGenerator, /import \{ zip, strToU8 \} from ["']fflate["']/);
-    assert.match(clientGenerator, /export async function generateProjectInBrowser/);
-    assert.doesNotMatch(clientGenerator, /zipSync/);
+test("browser compression stays inside a dedicated worker without nested blob workers", () => {
+    const generator = readFileSync(join(directory, "../client-generate.ts"), "utf8");
+    const worker = readFileSync(join(directory, "../processing/task.worker.ts"), "utf8");
+    const client = readFileSync(join(directory, "../processing/client.ts"), "utf8");
+    const page = readFileSync(join(directory, "../../app/export/page.tsx"), "utf8");
+    assert.match(generator, /import \{ zipSync, strToU8 \} from ["']fflate["']/);
+    assert.match(worker, /await import\("\.\.\/client-generate"\)/);
+    assert.match(client, /new Worker\(new URL/);
+    assert.match(client, /worker\.terminate\(\)/);
+    assert.doesNotMatch(page, /import \{ generateProjectInBrowser/);
 });

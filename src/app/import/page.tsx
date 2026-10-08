@@ -23,20 +23,20 @@ import { Header } from "@/components/shared/header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useProjectStore, type ParsedSpec } from "@/store/project-store";
-import {
-  parseOpenAPIFromContent,
-  parseOpenAPIFromURL,
-  buildValidationSummary,
-  stashValidationSummary,
-} from "@/lib/parsers/openapi";
+import { useProjectStore } from "@/store/project-store";
+import { useProcessing } from "@/hooks/use-processing";
+import type { PreparedImport } from "@/lib/processing/types";
+import { stashValidationSummary } from "@/lib/parsers/validation";
+import type { PortableProjectFile } from "@/store/project-file";
+import { MAX_SPEC_BYTES } from "@/lib/processing/limits";
 import { useDropzone } from "react-dropzone";
 
 type ImportTab = "file" | "url" | "paste";
-const MAX_LOCAL_SPEC_BYTES = 5 * 1024 * 1024;
+const MAX_LOCAL_SPEC_BYTES = MAX_SPEC_BYTES;
 
 export default function ImportPage() {
   const router = useRouter();
+  const processing = useProcessing();
   const {
     setSpec,
     setCurrentStep,
@@ -69,11 +69,11 @@ export default function ImportPage() {
   // Shared post-parse step for EVERY import path (file / url / paste / sample):
   // run validateSpec() via buildValidationSummary(), stash the concise summary
   // for the editor banner, commit the spec to the store, and advance.
-  const finishImport = (parsedSpec: ParsedSpec, source: string, label?: string) => {
-    const summary = buildValidationSummary(parsedSpec, label);
-    stashValidationSummary(summary);
-    setSpec(parsedSpec, source);
+  const finishImport = (prepared: PreparedImport, source: string) => {
+    stashValidationSummary(prepared.summary);
+    setSpec(prepared.spec, source, prepared);
     setCurrentStep("editor");
+    setLoading(false);
     router.push("/editor");
   };
 
@@ -85,8 +85,8 @@ export default function ImportPage() {
       const res = await fetch("/samples/petstore.json");
       if (!res.ok) throw new Error("Could not load the sample spec");
       const content = await res.text();
-      const parsedSpec = await parseOpenAPIFromContent(content, "petstore.json");
-      finishImport(parsedSpec, "Petstore (sample)", "Petstore (sample)");
+      const parsedSpec = await processing.run<PreparedImport>({ action: "parse", content, filename: "petstore.json" });
+      finishImport(parsedSpec, "Petstore (sample)");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load sample");
       setIsSampleLoading(false);
@@ -105,8 +105,7 @@ export default function ImportPage() {
     setLoading(true);
     setError(null);
     try {
-      const content = await file.text();
-      const parsedSpec = await parseOpenAPIFromContent(content, file.name);
+      const parsedSpec = await processing.run<PreparedImport>({ action: "parse", file, filename: file.name });
       finishImport(parsedSpec, file.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse file");
@@ -142,7 +141,7 @@ export default function ImportPage() {
     setLoading(true);
     setError(null);
     try {
-      const parsedSpec = await parseOpenAPIFromURL(specUrl);
+      const parsedSpec = await processing.runURL<PreparedImport>(specUrl);
       finishImport(parsedSpec, specUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch spec");
@@ -161,7 +160,7 @@ export default function ImportPage() {
     setLoading(true);
     setError(null);
     try {
-      const parsedSpec = await parseOpenAPIFromContent(pastedContent, "pasted-spec");
+      const parsedSpec = await processing.run<PreparedImport>({ action: "parse", content: pastedContent, filename: "pasted-spec" });
       finishImport(parsedSpec, "Pasted Content");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse content");
@@ -170,10 +169,10 @@ export default function ImportPage() {
     }
   };
 
-  const isProcessing = isFileParsing || isUrlFetching || isPasteParsing;
+  const isProcessing = processing.isProcessing || isFileParsing || isUrlFetching || isPasteParsing || isSampleLoading;
 
-  const handleLoadProject = (id: string) => {
-    if (loadProject(id)) router.push("/editor");
+  const handleLoadProject = async (id: string) => {
+    if (await loadProject(id)) router.push("/editor");
   };
 
   const handleClearHistory = () => {
@@ -182,8 +181,8 @@ export default function ImportPage() {
     }
   };
 
-  const triggerProjectExport = (id: string, name: string) => {
-    const content = exportProject(id);
+  const triggerProjectExport = async (id: string, name: string) => {
+    const content = await exportProject(id);
     if (!content) return;
     const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
     const anchor = document.createElement("a");
@@ -195,12 +194,11 @@ export default function ImportPage() {
 
   const handleProjectFile = async (file: File | undefined) => {
     if (!file) return;
-    if (file.size > MAX_LOCAL_SPEC_BYTES) {
-      setError("Project files are limited to 5 MB.");
-      return;
-    }
-    const text = await file.text();
-    if (importProject(text)) router.push("/editor");
+    setError(null);
+    try {
+      const prepared = await processing.run<PortableProjectFile>({ action: "project-import", file });
+      if (await importProject(prepared)) router.push("/editor");
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not read project file."); }
   };
 
   const commitRename = (id: string) => {
@@ -220,8 +218,9 @@ export default function ImportPage() {
           <div className="text-center space-y-4">
             <Loader2 className="w-8 h-8 text-primary animate-spin mx-auto" />
             <p className="text-sm tracking-[0.15em] uppercase text-muted-foreground">
-              {isUrlFetching ? "Fetching specification..." : "Parsing file..."}
+              {processing.stage}
             </p>
+            <Button onClick={processing.cancel}>Cancel</Button>
           </div>
         </div>
       )}

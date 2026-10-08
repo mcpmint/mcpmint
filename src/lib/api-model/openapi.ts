@@ -396,7 +396,6 @@ export function buildOpenAPIModel(api: OpenAPISpec, source: Partial<ApiSourceMet
                     : normalizeSecurityRequirements(operation.security),
                 servers: normalizeServers(operation as OpenAPISpec),
                 pathServers,
-                source: { raw: operation },
             });
         }
     }

@@ -42,3 +42,19 @@ test("rejects malformed, unsupported, and legacy project files", () => {
     assert.throws(() => parseProjectFile('{"kind":"other","schemaVersion":1}'), /Unsupported project file/);
     assert.throws(() => parseProjectFile('{"kind":"mcpmint-project","schemaVersion":1,"project":{},"data":{}}'), /metadata/);
 });
+
+test("rejects corrupted project configuration and endpoint references", () => {
+    const invalid = structuredClone(fixture);
+    (invalid.data.serverConfig as { port: number }).port = 999999;
+    assert.throws(() => parseProjectFile(JSON.stringify(invalid)), /65535/);
+    const invalidModel = structuredClone(fixture);
+    (invalidModel.data.spec.apiModel as unknown as { operations: unknown }).operations = "broken";
+    assert.throws(() => parseProjectFile(JSON.stringify(invalidModel)), /array/);
+});
+
+test("portable endpoint display metadata must agree with its canonical operation", () => {
+    const invalid = JSON.parse(JSON.stringify(fixture)) as PortableProjectFile;
+    invalid.data.spec.endpoints.push({ id: "one", method: "GET", path: "/display", parameters: [] });
+    invalid.data.spec.apiModel!.operations.push({ id: "one", method: "POST", path: "/actual", parameters: [], responses: [] });
+    assert.throws(() => parseProjectFile(JSON.stringify(invalid)), /methods and paths/);
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { CheckCircle2, Circle, Loader2, Monitor, Network, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -75,16 +75,17 @@ function configFor(client: McpClient, input: McpClientConfigInput): { language: 
 }
 
 export function InstallationWizard({ snapshot }: { snapshot: InstallationSnapshot }) {
-  const [os, setOs] = useState<ClientOperatingSystem>("macos");
+  const detectedOs = useSyncExternalStore(() => () => {}, () => detectOperatingSystem(navigator.platform, navigator.userAgent), () => "macos" as ClientOperatingSystem);
+  const [osOverride, setOs] = useState<ClientOperatingSystem | null>(null);
+  const os = osOverride || detectedOs;
+  const probeController = useRef<AbortController | null>(null);
+  useEffect(() => () => probeController.current?.abort(), []);
   const [client, setClient] = useState<McpClient>("claude-desktop");
   const [projectDirectory, setProjectDirectory] = useState(`/absolute/path/to/${snapshot.serverName}`);
   const [verified, setVerified] = useState(false);
   const [probeState, setProbeState] = useState<"idle" | "loading" | "passed" | "failed">("idle");
   const [probeMessage, setProbeMessage] = useState("");
 
-  useEffect(() => {
-    setOs(detectOperatingSystem(navigator.platform, navigator.userAgent));
-  }, []);
 
   const clientInput = useMemo(() => inputFor(snapshot, projectDirectory), [snapshot, projectDirectory]);
   const config = configFor(client, clientInput);
@@ -99,7 +100,9 @@ export function InstallationWizard({ snapshot }: { snapshot: InstallationSnapsho
   const probe = async () => {
     setProbeState("loading");
     setProbeMessage("");
+    probeController.current?.abort();
     const controller = new AbortController();
+    probeController.current = controller;
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
       const response = await fetch(transportUrl(snapshot), {
@@ -109,6 +112,7 @@ export function InstallationWizard({ snapshot }: { snapshot: InstallationSnapsho
         referrerPolicy: "no-referrer",
         signal: controller.signal,
       });
+      await response.body?.cancel();
       setProbeState("passed");
       setProbeMessage(`Server responded with HTTP ${response.status}. The endpoint is reachable from this browser.`);
     } catch (error) {

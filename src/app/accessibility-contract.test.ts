@@ -53,7 +53,7 @@ test("icon-only GitHub navigation has an accessible name", () => {
 });
 
 test("homepage content and transformation proof do not depend on hydration to become visible", () => {
-    const page = read("page.tsx");
+    const page = read("home-client.tsx");
     const scene = read("../components/marketing/api-mint-scene.tsx");
 
     assert.doesNotMatch(page, /mounted\s*\?\s*"opacity-100"/);
@@ -65,7 +65,7 @@ test("homepage content and transformation proof do not depend on hydration to be
 test("mobile export uses native progressive disclosure for advanced evidence", () => {
     const exportPage = read("export/page.tsx");
     assert.match(exportPage, /function ResponsiveDisclosure/);
-    assert.match(exportPage, /<details className="progressive-section/);
+    assert.match(exportPage, /<details\s+className="progressive-section/);
     assert.match(exportPage, /focus-visible:outline-2/);
 });
 

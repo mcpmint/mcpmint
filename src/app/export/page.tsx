@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Download,
@@ -41,12 +41,26 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { TrustScanPanel } from "@/components/export/trust-scan-panel";
 import { RequestSandbox } from "@/components/export/request-sandbox";
 import { InstallationWizard } from "@/components/export/installation-wizard";
-import { AuthConfig, ExportConfig, McpServerAuthConfig, ParsedSpec, ServerConfig, useProjectStore } from "@/store/project-store";
-import { buildToolPlans } from "@/lib/generator/planner";
-import { generateProjectInBrowser, previewProjectInBrowser } from "@/lib/client-generate";
-import { createScanAttestation, scanTools } from "@/lib/scanner";
-import { projectToolsToScanTools } from "@/lib/scanner/from-project";
-import { buildGenerationPlan } from "@/lib/generator/normalize";
+import {
+  AuthConfig,
+  ExportConfig,
+  McpServerAuthConfig,
+  ParsedSpec,
+  ServerConfig,
+  useProjectStore,
+} from "@/store/project-store";
+
+import { useProcessing } from "@/hooks/use-processing";
+import { useHydratedProject } from "@/hooks/use-hydrated-project";
+import { runProcessing } from "@/lib/processing/client";
+import type { ExportAnalysis } from "@/lib/processing/types";
+import type {
+  ClientGenerationResult,
+  ClientPreviewResult,
+} from "@/lib/client-generate";
+import { ProcessingOverlay } from "@/components/shared/processing-overlay";
+import { MAX_SELECTED_TOOLS } from "@/lib/processing/limits";
+import { createScanAttestation } from "@/lib/scanner";
 
 interface PreviewFile {
   name: string;
@@ -104,11 +118,19 @@ const defaultExportFeatures = {
 function getDetectedAuthOptions(spec: ParsedSpec): AuthConfig[] {
   const options: AuthConfig[] = [];
   for (const scheme of Object.values(spec.securitySchemes)) {
-    const c = scheme as { type?: string; scheme?: string; in?: string; name?: string };
+    const c = scheme as {
+      type?: string;
+      scheme?: string;
+      in?: string;
+      name?: string;
+    };
     if (c.type === "apiKey") {
       options.push({
         type: "apiKey",
-        apiKey: { name: c.name || "X-API-Key", in: c.in === "query" || c.in === "cookie" ? c.in : "header" },
+        apiKey: {
+          name: c.name || "X-API-Key",
+          in: c.in === "query" || c.in === "cookie" ? c.in : "header",
+        },
       });
     } else if (c.type === "http" && c.scheme === "bearer") {
       options.push({ type: "bearer" });
@@ -120,7 +142,9 @@ function getDetectedAuthOptions(spec: ParsedSpec): AuthConfig[] {
 }
 
 function getAuthLabel(type: AuthType): string {
-  return { none: "None", apiKey: "API Key", bearer: "Bearer", basic: "Basic" }[type];
+  return { none: "None", apiKey: "API Key", bearer: "Bearer", basic: "Basic" }[
+    type
+  ];
 }
 
 function getTransportLabel(transport: Transport): string {
@@ -144,56 +168,17 @@ function getRuntimeLabel(config: {
 }
 
 function getEndpointLabel(spec: ParsedSpec, endpointId: string): string {
-  const endpoint = spec.endpoints.find((candidate) => candidate.id === endpointId);
+  const endpoint = spec.endpoints.find(
+    (candidate) => candidate.id === endpointId,
+  );
   if (endpoint) return `${endpoint.method} ${endpoint.path}`;
 
-  const operation = spec.apiModel?.operations.find((candidate) => candidate.id === endpointId);
+  const operation = spec.apiModel?.operations.find(
+    (candidate) => candidate.id === endpointId,
+  );
   if (operation) return `${operation.method} ${operation.path}`;
 
   return endpointId;
-}
-
-function getManualReviewEndpoints(spec: ParsedSpec, selectedTools: { id: string; toolName: string }[]): EndpointReviewItem[] {
-  const selectedIds = new Set(selectedTools.map((tool) => tool.id));
-  const toolNames = new Map(selectedTools.map((tool) => [tool.id, tool.toolName]));
-
-  if (spec.apiModel) {
-    return buildToolPlans(spec.apiModel)
-      .filter((plan) => selectedIds.has(plan.id))
-      .map((plan) => ({
-        id: plan.id,
-        label: `${plan.method} ${plan.path}`,
-        toolName: toolNames.get(plan.id) || plan.toolName,
-        reasons: [
-          ...plan.manualReview.map((flag) => flag.message),
-          ...plan.warnings,
-          ...(plan.authStrategy.source === "unsupported" ? ["Unsupported authentication requirements need manual review."] : []),
-        ],
-      }))
-      .filter((item) => item.reasons.length > 0);
-  }
-
-  return selectedTools
-    .map((tool) => {
-      const endpoint = spec.endpoints.find((candidate) => candidate.id === tool.id);
-      const reasons: string[] = [];
-
-      if (endpoint?.requestBody?.contentType && ![
-        "application/json",
-        "application/x-www-form-urlencoded",
-        "multipart/form-data",
-      ].some((contentType) => endpoint.requestBody?.contentType.includes(contentType))) {
-        reasons.push(`Request body content type "${endpoint.requestBody.contentType}" may require manual serialization review.`);
-      }
-
-      return {
-        id: tool.id,
-        label: endpoint ? `${endpoint.method} ${endpoint.path}` : tool.id,
-        toolName: tool.toolName,
-        reasons,
-      };
-    })
-    .filter((item) => item.reasons.length > 0);
 }
 
 function formatAuthConfig(config: AuthConfig): string {
@@ -204,14 +189,18 @@ function formatAuthConfig(config: AuthConfig): string {
   return getAuthLabel(config.type);
 }
 
-function formatMcpServerAuthConfig(config: McpServerAuthConfig, transport: Transport): string {
+function formatMcpServerAuthConfig(
+  config: McpServerAuthConfig,
+  transport: Transport,
+): string {
   if (transport === "stdio") return "Not applicable";
   // Node and Python both emit access middleware: optional bearer (MCP_AUTH_TOKEN)
   // plus Origin allow-list with localhost-only deny-by-default when empty.
   const auth = config.type === "bearer" ? "Bearer via MCP_AUTH_TOKEN" : "None";
-  const origins = config.allowedOrigins.length > 0
-    ? `${config.allowedOrigins.length} origin${config.allowedOrigins.length === 1 ? "" : "s"}`
-    : "localhost only (deny-by-default)";
+  const origins =
+    config.allowedOrigins.length > 0
+      ? `${config.allowedOrigins.length} origin${config.allowedOrigins.length === 1 ? "" : "s"}`
+      : "localhost only (deny-by-default)";
   return `${auth} · ${origins}`;
 }
 
@@ -234,9 +223,28 @@ interface GeneratedSnapshot {
 }
 
 export default function ExportPage() {
+  const hydrated = useHydratedProject();
+  const spec = useProjectStore((state) => state.spec);
   const router = useRouter();
+  useEffect(() => {
+    if (hydrated && !spec) router.replace("/import");
+  }, [hydrated, spec, router]);
+  if (!hydrated || !spec)
+    return (
+      <div role="status" className="p-8">
+        Restoring your project…
+      </div>
+    );
+  return <ExportContent spec={spec} />;
+}
+function ExportContent({ spec }: { spec: ParsedSpec }) {
+  const router = useRouter();
+  const processing = useProcessing();
+  const [analysisResult, setAnalysisResult] = useState<{
+    signature: string;
+    data: ExportAnalysis;
+  } | null>(null);
   const {
-    spec,
     specSource,
     tools,
     serverConfig,
@@ -260,67 +268,112 @@ export default function ExportPage() {
   const [error, setError] = useState<string | null>(null);
   const [portValue, setPortValue] = useState(serverConfig.port.toString());
   const [generated, setGenerated] = useState<GeneratedSnapshot | null>(null);
-  const [acceptedRiskSignature, setAcceptedRiskSignature] = useState<string | null>(null);
+  const [acceptedRiskSignature, setAcceptedRiskSignature] = useState<
+    string | null
+  >(null);
   // Privacy mode: generate entirely in the browser so the spec never leaves the
   // machine. Default ON. Switching off uses the server route for generation,
   // but process-spawning verification remains a local CLI-only operation.
   const [browserMode, setBrowserMode] = useState(true);
 
   useEffect(() => {
-    if (!spec) router.push("/");
-  }, [spec, router]);
-
-  useEffect(() => {
     const n = parseInt(portValue);
     if (!isNaN(n) && n > 0 && n <= 65535) setServerConfig({ port: n });
   }, [portValue, setServerConfig]);
 
-  if (!spec) return null;
-
-  const selectedTools = tools.filter((t) => t.enabled);
-  const trustScanTools = projectToolsToScanTools(spec.apiModel, selectedTools);
-  const trustReport = scanTools(trustScanTools);
-  const trustSignature = JSON.stringify(trustScanTools);
-  const riskAccepted = acceptedRiskSignature === trustSignature;
-  const trustDownloadAllowed = trustReport.verdict !== "red" || riskAccepted;
-  const generatorPayload = {
-    spec: {
-      info: spec.info,
-      baseUrl: spec.baseUrl,
-      apiModel: spec.apiModel,
-    },
-    // Schemas are always derived from spec.apiModel (the generator's sole
-    // supported path), so tool/parameter schema blobs are not sent.
-    tools: selectedTools.map((tool) => ({
-      endpointId: tool.endpointId,
-      enabled: tool.enabled,
-      toolName: tool.toolName,
-      description: tool.description,
-      bodyContentType: tool.bodyContentType,
-      parameters: tool.parameters.map((parameter) => ({
-        name: parameter.name,
-        originalName: parameter.originalName,
-        type: parameter.type,
-        required: parameter.required,
-        description: parameter.description,
-        location: parameter.location,
-        hidden: parameter.hidden,
+  const selectedTools = useMemo(
+    () => tools.filter((tool) => tool.enabled),
+    [tools],
+  );
+  const generatorPayload = useMemo(
+    () => ({
+      spec: {
+        info: spec.info,
+        baseUrl: spec.baseUrl,
+        apiModel: spec.apiModel,
+      },
+      // Schemas are always derived from spec.apiModel (the generator's sole
+      // supported path), so tool/parameter schema blobs are not sent.
+      tools: selectedTools.map((tool) => ({
+        endpointId: tool.endpointId,
+        enabled: tool.enabled,
+        toolName: tool.toolName,
+        description: tool.description,
+        bodyContentType: tool.bodyContentType,
+        parameters: tool.parameters.map((parameter) => ({
+          name: parameter.name,
+          originalName: parameter.originalName,
+          type: parameter.type,
+          required: parameter.required,
+          description: parameter.description,
+          location: parameter.location,
+          hidden: parameter.hidden,
+        })),
       })),
-    })),
-    serverConfig,
-    authConfig,
-    mcpServerAuthConfig,
-    exportConfig: {
-      ...exportConfig,
-      verificationMode: "fast" as const,
-      features: { ...exportConfig.features, verification: false },
-    },
+      serverConfig,
+      authConfig,
+      mcpServerAuthConfig,
+      exportConfig: {
+        ...exportConfig,
+        verificationMode: "fast" as const,
+        features: { ...exportConfig.features, verification: false },
+      },
+    }),
+    [
+      spec,
+      selectedTools,
+      serverConfig,
+      authConfig,
+      mcpServerAuthConfig,
+      exportConfig,
+    ],
+  );
+  const generatorSignature = useMemo(
+    () => JSON.stringify(generatorPayload),
+    [generatorPayload],
+  );
+  useEffect(() => {
+    const controller = new AbortController();
+    runProcessing<ExportAnalysis>(
+      { action: "export-analysis", payload: generatorPayload },
+      { signal: controller.signal },
+    )
+      .then((data) =>
+        setAnalysisResult({ signature: generatorSignature, data }),
+      )
+      .catch((error) => {
+        if (!controller.signal.aborted) setError(error.message);
+      });
+    return () => controller.abort();
+  }, [generatorPayload, generatorSignature]);
+  const analysis =
+    analysisResult?.signature === generatorSignature
+      ? analysisResult.data
+      : null;
+  const generationPlan = analysis?.plan;
+  const trustReport = analysis?.report || {
+    schemaVersion: 1 as const,
+    verdict: "green" as const,
+    score: 0,
+    toolCount: 0,
+    checks: [],
+    findings: [],
   };
-  const generatorSignature = JSON.stringify(generatorPayload);
-  const generationPlan = buildGenerationPlan(generatorPayload);
-  const previewData = previewResult?.signature === generatorSignature ? previewResult.data : null;
+  const trustSignature = useMemo(
+    () => (analysis ? JSON.stringify(analysis.trustTools) : ""),
+    [analysis],
+  );
+  const riskAccepted =
+    Boolean(analysis) && acceptedRiskSignature === trustSignature;
+  const trustDownloadAllowed =
+    Boolean(analysis) && (trustReport.verdict !== "red" || riskAccepted);
+  const previewData =
+    previewResult?.signature === generatorSignature ? previewResult.data : null;
   const previewFiles = previewData?.files || [];
-  const exportFeatures = { ...defaultExportFeatures, ...(exportConfig.features ?? {}) };
+  const exportFeatures = {
+    ...defaultExportFeatures,
+    ...(exportConfig.features ?? {}),
+  };
   const detectedAuth = getDetectedAuthOptions(spec);
   const detectedApiKey = detectedAuth.find((o) => o.type === "apiKey");
   const selectedEndpointItems = selectedTools.map((tool) => ({
@@ -328,26 +381,57 @@ export default function ExportPage() {
     label: getEndpointLabel(spec, tool.endpointId),
     toolName: tool.toolName,
   }));
-  const manualReviewEndpoints = getManualReviewEndpoints(spec, selectedEndpointItems);
+  const manualReviewEndpoints = analysis?.manualReview || [];
   const port = parseInt(portValue, 10);
   const isPortValid = !isNaN(port) && port > 0 && port <= 65535;
-  const isAuthValid = authConfig.type !== "apiKey" || Boolean(authConfig.apiKey?.name?.trim());
+  const isAuthValid =
+    authConfig.type !== "apiKey" || Boolean(authConfig.apiKey?.name?.trim());
   const isHttpTransport = serverConfig.transport !== "stdio";
   const isWildcardHost = serverConfig.host.trim() === "0.0.0.0";
   const duplicateToolNames = selectedTools
     .map((tool) => tool.toolName.trim())
     .filter((name, index, names) => name && names.indexOf(name) !== index);
   const preGenerationWarnings = [
-    ...(selectedTools.length === 0 ? ["Select at least one endpoint before generating."] : []),
+    ...(selectedTools.length === 0
+      ? ["Select at least one endpoint before generating."]
+      : []),
+    ...(!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(serverConfig.name.trim())
+      ? [
+          "Server name must be 1–64 letters, numbers, dots, underscores or hyphens and start with a letter or number.",
+        ]
+      : []),
+    ...(selectedTools.length > MAX_SELECTED_TOOLS
+      ? [
+          "Select at most 500 tools per server. Return to Configure and reduce the selection.",
+        ]
+      : []),
     ...(!isPortValid ? ["Server port must be between 1 and 65535."] : []),
     ...(!isAuthValid ? ["API key authentication needs a key name."] : []),
-    ...(isHttpTransport && mcpServerAuthConfig.type === "none" ? [
-      "HTTP/SSE MCP server access has no bearer token configured. Generated servers still deny non-localhost Origin headers by default; bind to localhost, or select bearer auth and set MCP_AUTH_TOKEN before exposing this server.",
-    ] : []),
-    ...(isHttpTransport && isWildcardHost && mcpServerAuthConfig.type === "none" ? ["Host is 0.0.0.0 and MCP server access auth is none. This can expose the MCP server to the network."] : []),
-    ...(duplicateToolNames.length > 0 ? [`Duplicate tool names will be renamed during generation: ${[...new Set(duplicateToolNames)].join(", ")}.`] : []),
-    ...(manualReviewEndpoints.length > 0 ? [`${manualReviewEndpoints.length} selected endpoint${manualReviewEndpoints.length === 1 ? "" : "s"} need manual review.`] : []),
-    ...(spec.baseUrl ? [] : ["No base URL was detected; generated code will use the configured fallback."]),
+    ...(isHttpTransport && mcpServerAuthConfig.type === "none"
+      ? [
+          "HTTP/SSE MCP server access has no bearer token configured. Generated servers still deny non-localhost Origin headers by default; bind to localhost, or select bearer auth and set MCP_AUTH_TOKEN before exposing this server.",
+        ]
+      : []),
+    ...(isHttpTransport && isWildcardHost && mcpServerAuthConfig.type === "none"
+      ? [
+          "Host is 0.0.0.0 and MCP server access auth is none. This can expose the MCP server to the network.",
+        ]
+      : []),
+    ...(duplicateToolNames.length > 0
+      ? [
+          `Duplicate tool names will be renamed during generation: ${[...new Set(duplicateToolNames)].join(", ")}.`,
+        ]
+      : []),
+    ...(manualReviewEndpoints.length > 0
+      ? [
+          `${manualReviewEndpoints.length} selected endpoint${manualReviewEndpoints.length === 1 ? "" : "s"} need manual review.`,
+        ]
+      : []),
+    ...(spec.baseUrl
+      ? []
+      : [
+          "No base URL was detected; generated code will use the configured fallback.",
+        ]),
   ];
   const previewWarnings = [
     ...(previewData?.validation?.warnings || []),
@@ -361,12 +445,19 @@ export default function ExportPage() {
     portValue.trim() !== "" &&
     isPortValid &&
     selectedTools.length > 0 &&
+    selectedTools.length <= MAX_SELECTED_TOOLS &&
+    /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(serverConfig.name.trim()) &&
     isAuthValid;
   const canGenerate = isFormValid && trustDownloadAllowed;
 
   const handleAuthTypeChange = (v: AuthType) => {
     if (v === "apiKey") {
-      setAuthConfig(detectedApiKey || { type: "apiKey", apiKey: { name: "X-API-Key", in: "header" } });
+      setAuthConfig(
+        detectedApiKey || {
+          type: "apiKey",
+          apiKey: { name: "X-API-Key", in: "header" },
+        },
+      );
       return;
     }
     setAuthConfig({ type: v });
@@ -391,7 +482,12 @@ export default function ExportPage() {
       framework: "mcp-ts-sdk",
       packageManager: "npm",
       compactMode: preset !== "local" && selectedTools.length > 25,
-      features: { documentation: true, tests: true, docker: preset === "docker", verification: false },
+      features: {
+        documentation: true,
+        tests: true,
+        docker: preset === "docker",
+        verification: false,
+      },
     });
     setServerConfig({
       transport: preset === "local" ? "stdio" : "http",
@@ -399,9 +495,11 @@ export default function ExportPage() {
       port: 8080,
     });
     setPortValue("8080");
-    setMcpServerAuthConfig(preset === "local"
-      ? { type: "none", allowedOrigins: [] }
-      : { type: "bearer", allowedOrigins: ["https://client.example.com"] });
+    setMcpServerAuthConfig(
+      preset === "local"
+        ? { type: "none", allowedOrigins: [] }
+        : { type: "bearer", allowedOrigins: ["https://client.example.com"] },
+    );
     setBrowserMode(true);
   };
 
@@ -412,7 +510,7 @@ export default function ExportPage() {
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
+    setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     a.remove();
   };
 
@@ -426,11 +524,17 @@ export default function ExportPage() {
         riskAccepted,
       });
       triggerDownload(
-        new Blob([`${JSON.stringify(attestation, null, 2)}\n`], { type: "application/json" }),
+        new Blob([`${JSON.stringify(attestation, null, 2)}\n`], {
+          type: "application/json",
+        }),
         `${serverConfig.name}-trust-attestation.json`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create trust attestation");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not create trust attestation",
+      );
     }
   };
 
@@ -439,13 +543,17 @@ export default function ExportPage() {
     setError(null);
     try {
       if (!trustDownloadAllowed) {
-        throw new Error("Review and acknowledge the red Trust Scan findings before downloading.");
+        throw new Error(
+          "Review and acknowledge the red Trust Scan findings before downloading.",
+        );
       }
       if (browserMode) {
         // Privacy mode: run the pure generator + zip entirely in the browser.
         // The spec never touches the network. Process verification is a local
         // CLI-only operation, so it is not run by either web generation path.
-        const { blob, filename } = await generateProjectInBrowser(generatorPayload);
+        const { blob, filename } = await processing.run<
+          Pick<ClientGenerationResult, "blob" | "filename">
+        >({ action: "generate", payload: generatorPayload });
         triggerDownload(blob, filename);
       } else {
         const res = await fetch("/api/generate", {
@@ -453,12 +561,17 @@ export default function ExportPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(generatorPayload),
         });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Failed"); }
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error(d.error || "Failed");
+        }
         const blob = await res.blob();
         triggerDownload(blob, `${serverConfig.name}.zip`);
       }
-      if (!saveCurrentProject()) {
-        setError("The download succeeded, but this project could not be saved to browser history.");
+      if (!(await saveCurrentProject())) {
+        setError(
+          "The download succeeded, but this project could not be saved to browser history.",
+        );
       }
       setGenerated({
         serverName: serverConfig.name,
@@ -495,7 +608,10 @@ export default function ExportPage() {
     try {
       if (browserMode) {
         // Privacy mode: preview entirely in-browser so the apiModel never uploads.
-        const data = previewProjectInBrowser(generatorPayload);
+        const data = await processing.run<ClientPreviewResult>({
+          action: "preview",
+          payload: generatorPayload,
+        });
         setPreviewResult({
           signature: generatorSignature,
           data: {
@@ -519,8 +635,11 @@ export default function ExportPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(generatorPayload),
         });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Failed"); }
-        const data = await res.json() as PreviewData;
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error(d.error || "Failed");
+        }
+        const data = (await res.json()) as PreviewData;
         setPreviewResult({ signature: generatorSignature, data });
       }
     } catch (err) {
@@ -534,6 +653,12 @@ export default function ExportPage() {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
+        {processing.isProcessing && (
+          <ProcessingOverlay
+            stage={processing.stage}
+            cancel={processing.cancel}
+          />
+        )}
         <main className="pt-14 flex-1 flex flex-col relative z-10">
           <SuccessView
             snapshot={generated}
@@ -550,29 +675,60 @@ export default function ExportPage() {
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
+      {processing.isProcessing && (
+        <ProcessingOverlay
+          stage={processing.stage}
+          cancel={processing.cancel}
+        />
+      )}
 
       <main className="pt-14 flex-1 flex flex-col relative z-10">
         {/* ═══ Split view ═══ */}
         <div className="flex-1 flex">
-
           {/* ─── Left: Configuration ─── */}
           <div className="flex-1 overflow-y-auto border-r border-border">
             <div className="max-w-2xl mx-auto px-4 sm:px-8 py-8 sm:py-10 space-y-0">
-
               <Section title="Guided setup">
                 <div className="grid gap-2 sm:grid-cols-3">
-                  {([
-                    ["local", "Local Claude Desktop", "stdio · localhost · no network listener"],
-                    ["remote", "Remote secure HTTP", "HTTP · bearer auth · origin allow-list"],
-                    ["docker", "Docker / cloud", "HTTP · bearer auth · Docker output"],
-                  ] as [GuidedPreset, string, string][]).map(([value, label, description]) => (
-                    <button key={value} type="button" onClick={() => applyGuidedPreset(value)} className="min-h-24 border border-border bg-surface p-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/[0.04]">
-                      <span className="block text-xs font-semibold text-foreground">{label}</span>
-                      <span className="mt-2 block text-[10px] leading-relaxed text-muted-foreground">{description}</span>
+                  {(
+                    [
+                      [
+                        "local",
+                        "Local Claude Desktop",
+                        "stdio · localhost · no network listener",
+                      ],
+                      [
+                        "remote",
+                        "Remote secure HTTP",
+                        "HTTP · bearer auth · origin allow-list",
+                      ],
+                      [
+                        "docker",
+                        "Docker / cloud",
+                        "HTTP · bearer auth · Docker output",
+                      ],
+                    ] as [GuidedPreset, string, string][]
+                  ).map(([value, label, description]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => applyGuidedPreset(value)}
+                      className="min-h-24 border border-border bg-surface p-3 text-left transition-colors hover:border-primary/50 hover:bg-primary/[0.04]"
+                    >
+                      <span className="block text-xs font-semibold text-foreground">
+                        {label}
+                      </span>
+                      <span className="mt-2 block text-[10px] leading-relaxed text-muted-foreground">
+                        {description}
+                      </span>
                     </button>
                   ))}
                 </div>
-                <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">Presets establish safe transport, bind host, MCP authentication, origin, and packaging defaults. Every field remains editable below.</p>
+                <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
+                  Presets establish safe transport, bind host, MCP
+                  authentication, origin, and packaging defaults. Every field
+                  remains editable below.
+                </p>
               </Section>
 
               {/* Language Selection */}
@@ -583,14 +739,25 @@ export default function ExportPage() {
                     tag="TS"
                     tagColor="#339933"
                     selected={exportConfig.language === "node"}
-                    onClick={() => setExportConfig({ language: "node", framework: "mcp-ts-sdk", packageManager: "npm" })}
+                    onClick={() =>
+                      setExportConfig({
+                        language: "node",
+                        framework: "mcp-ts-sdk",
+                        packageManager: "npm",
+                      })
+                    }
                   />
                   <LangCard
                     label="Python"
                     tag="PY"
                     tagColor="#3776AB"
                     selected={exportConfig.language === "python"}
-                    onClick={() => setExportConfig({ language: "python", framework: "fastmcp" })}
+                    onClick={() =>
+                      setExportConfig({
+                        language: "python",
+                        framework: "fastmcp",
+                      })
+                    }
                   />
                 </div>
 
@@ -608,7 +775,9 @@ export default function ExportPage() {
                               ? "bg-primary text-primary-foreground"
                               : "text-muted-foreground hover:text-foreground"
                           }`}
-                          onClick={() => setExportConfig({ packageManager: pm })}
+                          onClick={() =>
+                            setExportConfig({ packageManager: pm })
+                          }
                         >
                           {pm}
                         </button>
@@ -621,11 +790,28 @@ export default function ExportPage() {
               {/* Server Details */}
               <Section title="Server">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Field label="Name" value={serverConfig.name} onChange={(v) => setServerConfig({ name: v })} />
-                  <Field label="Version" value={serverConfig.version} onChange={(v) => setServerConfig({ version: v })} />
-                  <Field label="Host" value={serverConfig.host} onChange={(v) => setServerConfig({ host: v })} />
+                  <Field
+                    label="Name"
+                    value={serverConfig.name}
+                    onChange={(v) => setServerConfig({ name: v })}
+                  />
+                  <Field
+                    label="Version"
+                    value={serverConfig.version}
+                    onChange={(v) => setServerConfig({ version: v })}
+                  />
+                  <Field
+                    label="Host"
+                    value={serverConfig.host}
+                    onChange={(v) => setServerConfig({ host: v })}
+                  />
                   <div className="space-y-1.5">
-                    <Label htmlFor="server-port" className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Port</Label>
+                    <Label
+                      htmlFor="server-port"
+                      className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                    >
+                      Port
+                    </Label>
                     <Input
                       id="server-port"
                       inputMode="numeric"
@@ -636,19 +822,31 @@ export default function ExportPage() {
                   </div>
                 </div>
                 <div className="mt-4">
-                  <Label htmlFor="server-transport" className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase mb-2 block">
+                  <Label
+                    htmlFor="server-transport"
+                    className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase mb-2 block"
+                  >
                     Transport
                   </Label>
                   <Select
                     value={serverConfig.transport}
-                    onValueChange={(v) => setServerConfig({ transport: v as Transport })}
+                    onValueChange={(v) =>
+                      setServerConfig({ transport: v as Transport })
+                    }
                   >
-                    <SelectTrigger id="server-transport" className="h-9 bg-background border-border text-xs">
+                    <SelectTrigger
+                      id="server-transport"
+                      className="h-9 bg-background border-border text-xs"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="stdio">stdio (local clients)</SelectItem>
-                      <SelectItem value="http">Streamable HTTP (recommended remote)</SelectItem>
+                      <SelectItem value="stdio">
+                        stdio (local clients)
+                      </SelectItem>
+                      <SelectItem value="http">
+                        Streamable HTTP (recommended remote)
+                      </SelectItem>
                       <SelectItem value="sse">SSE (legacy)</SelectItem>
                     </SelectContent>
                   </Select>
@@ -661,34 +859,50 @@ export default function ExportPage() {
                     label="Compact mode (meta-tools)"
                     description="Expose 3 meta-tools (list / get-schema / invoke) instead of one tool per endpoint. Keeps large APIs from bloating the model's context window."
                     checked={exportConfig.compactMode}
-                    onCheckedChange={(checked) => setExportConfig({ compactMode: checked })}
+                    onCheckedChange={(checked) =>
+                      setExportConfig({ compactMode: checked })
+                    }
                   />
                   <FeatureToggle
                     label="Documentation"
                     description="Include README and usage notes"
                     checked={exportFeatures.documentation}
-                    onCheckedChange={(checked) => setExportConfig({ features: { documentation: checked } })}
+                    onCheckedChange={(checked) =>
+                      setExportConfig({ features: { documentation: checked } })
+                    }
                   />
                   <FeatureToggle
                     label="Docker"
                     description="Add Dockerfile, compose, and ignore rules"
                     checked={exportFeatures.docker}
-                    onCheckedChange={(checked) => setExportConfig({ features: { docker: checked } })}
+                    onCheckedChange={(checked) =>
+                      setExportConfig({ features: { docker: checked } })
+                    }
                   />
                   <FeatureToggle
                     label="Tests"
                     description="Include generated smoke tests"
                     checked={exportFeatures.tests}
-                    onCheckedChange={(checked) => setExportConfig({ features: { tests: checked } })}
+                    onCheckedChange={(checked) =>
+                      setExportConfig({ features: { tests: checked } })
+                    }
                   />
                 </div>
               </Section>
 
               {/* Upstream API Authentication */}
               <Section title="Upstream API Auth">
-                <Label htmlFor="upstream-auth-type" className="sr-only">Upstream authentication type</Label>
-                <Select value={authConfig.type} onValueChange={(v) => handleAuthTypeChange(v as AuthType)}>
-                  <SelectTrigger id="upstream-auth-type" className="h-9 bg-background border-border text-xs">
+                <Label htmlFor="upstream-auth-type" className="sr-only">
+                  Upstream authentication type
+                </Label>
+                <Select
+                  value={authConfig.type}
+                  onValueChange={(v) => handleAuthTypeChange(v as AuthType)}
+                >
+                  <SelectTrigger
+                    id="upstream-auth-type"
+                    className="h-9 bg-background border-border text-xs"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -704,15 +918,39 @@ export default function ExportPage() {
                     <Field
                       label="Key Name"
                       value={authConfig.apiKey?.name || ""}
-                      onChange={(v) => setAuthConfig({ type: "apiKey", apiKey: { name: v, in: authConfig.apiKey?.in || "header" } })}
+                      onChange={(v) =>
+                        setAuthConfig({
+                          type: "apiKey",
+                          apiKey: {
+                            name: v,
+                            in: authConfig.apiKey?.in || "header",
+                          },
+                        })
+                      }
                     />
                     <div className="space-y-1.5">
-                      <Label htmlFor="api-key-location" className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Location</Label>
+                      <Label
+                        htmlFor="api-key-location"
+                        className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                      >
+                        Location
+                      </Label>
                       <Select
                         value={authConfig.apiKey?.in || "header"}
-                        onValueChange={(v) => setAuthConfig({ type: "apiKey", apiKey: { name: authConfig.apiKey?.name || "X-API-Key", in: v as "header" | "query" | "cookie" } })}
+                        onValueChange={(v) =>
+                          setAuthConfig({
+                            type: "apiKey",
+                            apiKey: {
+                              name: authConfig.apiKey?.name || "X-API-Key",
+                              in: v as "header" | "query" | "cookie",
+                            },
+                          })
+                        }
                       >
-                        <SelectTrigger id="api-key-location" className="h-9 bg-background border-border text-xs">
+                        <SelectTrigger
+                          id="api-key-location"
+                          className="h-9 bg-background border-border text-xs"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -729,7 +967,11 @@ export default function ExportPage() {
                   <div className="mt-3 flex items-center gap-2 text-[10px] text-muted-foreground tracking-wider">
                     <span className="uppercase">Detected:</span>
                     {detectedAuth.map((o, i) => (
-                      <Badge key={i} variant="outline" className="text-[9px] border-border px-1.5 py-0">
+                      <Badge
+                        key={i}
+                        variant="outline"
+                        className="text-[9px] border-border px-1.5 py-0"
+                      >
                         {getAuthLabel(o.type)}
                       </Badge>
                     ))}
@@ -743,55 +985,87 @@ export default function ExportPage() {
               >
                 {serverConfig.transport === "stdio" ? (
                   <div className="border border-border px-4 py-3 text-xs text-muted-foreground leading-relaxed">
-                    MCP server access auth is not applicable for stdio because the client talks to the server over local process stdin/stdout. Keep stdio for local-only use.
+                    MCP server access auth is not applicable for stdio because
+                    the client talks to the server over local process
+                    stdin/stdout. Keep stdio for local-only use.
                   </div>
                 ) : (
                   <div className="space-y-4">
                     <div className="space-y-1.5">
-                      <Label htmlFor="mcp-server-auth" className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Server Auth</Label>
-                      <Select value={mcpServerAuthConfig.type} onValueChange={(v) => handleMcpServerAuthTypeChange(v as McpServerAuthType)}>
-                        <SelectTrigger id="mcp-server-auth" className="h-9 bg-background border-border text-xs">
+                      <Label
+                        htmlFor="mcp-server-auth"
+                        className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                      >
+                        Server Auth
+                      </Label>
+                      <Select
+                        value={mcpServerAuthConfig.type}
+                        onValueChange={(v) =>
+                          handleMcpServerAuthTypeChange(v as McpServerAuthType)
+                        }
+                      >
+                        <SelectTrigger
+                          id="mcp-server-auth"
+                          className="h-9 bg-background border-border text-xs"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">No MCP auth</SelectItem>
-                          <SelectItem value="bearer">Bearer token from MCP_AUTH_TOKEN</SelectItem>
+                          <SelectItem value="bearer">
+                            Bearer token from MCP_AUTH_TOKEN
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
                     <div className="space-y-1.5">
-                      <Label htmlFor="allowed-origins" className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Allowed Origins</Label>
+                      <Label
+                        htmlFor="allowed-origins"
+                        className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+                      >
+                        Allowed Origins
+                      </Label>
                       <Input
                         id="allowed-origins"
                         value={mcpServerAuthConfig.allowedOrigins.join(", ")}
-                        onChange={(event) => handleAllowedOriginsChange(event.target.value)}
+                        onChange={(event) =>
+                          handleAllowedOriginsChange(event.target.value)
+                        }
                         placeholder="https://client.example.com, http://localhost:3000"
                         className="h-8 bg-background border-border text-xs focus:border-primary"
                       />
                       <p className="text-[11px] leading-relaxed text-muted-foreground">
-                        Generated HTTP/SSE servers reject disallowed Origin headers (Node and Python) and answer CORS preflight for allowed origins.
-                        Leave blank to allow only localhost origins (deny-by-default). Non-localhost browser clients must set MCP_ALLOWED_ORIGINS
-                        (comma-separated full origins such as https://client.example.com).
+                        Generated HTTP/SSE servers reject disallowed Origin
+                        headers (Node and Python) and answer CORS preflight for
+                        allowed origins. Leave blank to allow only localhost
+                        origins (deny-by-default). Non-localhost browser clients
+                        must set MCP_ALLOWED_ORIGINS (comma-separated full
+                        origins such as https://client.example.com).
                       </p>
                     </div>
 
                     {mcpServerAuthConfig.type === "bearer" && (
                       <div className="border border-primary/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                        Set MCP_AUTH_TOKEN in the generated server environment. HTTP/SSE requests must send Authorization: Bearer &lt;token&gt;.
-                        Node and Python both enforce this with a constant-time compare.
+                        Set MCP_AUTH_TOKEN in the generated server environment.
+                        HTTP/SSE requests must send Authorization: Bearer
+                        &lt;token&gt;. Node and Python both enforce this with a
+                        constant-time compare.
                       </div>
                     )}
 
                     {mcpServerAuthConfig.type === "none" && (
                       <div className="border border-amber-500/30 px-3 py-2 text-[11px] leading-relaxed text-amber-500">
-                        HTTP/SSE MCP server access has no bearer token configured. Prefer localhost binding unless another layer authenticates clients.
+                        HTTP/SSE MCP server access has no bearer token
+                        configured. Prefer localhost binding unless another
+                        layer authenticates clients.
                       </div>
                     )}
 
                     {isWildcardHost && mcpServerAuthConfig.type === "none" && (
                       <div className="border border-red/30 px-3 py-2 text-[11px] leading-relaxed text-red">
-                        Host 0.0.0.0 with no MCP server auth can expose this server to the network.
+                        Host 0.0.0.0 with no MCP server auth can expose this
+                        server to the network.
                       </div>
                     )}
                   </div>
@@ -802,7 +1076,7 @@ export default function ExportPage() {
                 <div className="space-y-3">
                   <FeatureToggle
                     label="Generate in your browser"
-                    description="Privacy mode: generate, preview, and zip locally. Your spec never leaves your browser."
+                    description="Generate, preview, and zip locally. Working projects are saved in this browser."
                     checked={browserMode}
                     onCheckedChange={setBrowserMode}
                   />
@@ -811,16 +1085,18 @@ export default function ExportPage() {
                       <>
                         <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary" />
                         <p>
-                          Generation and file preview run entirely on this device. The spec is never uploaded.
+                          Generation and file preview run entirely on this
+                          device. The spec is never uploaded.
                         </p>
                       </>
                     ) : (
                       <>
                         <Cpu className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground/70" />
                         <p>
-                          Server mode sends the spec to this app&rsquo;s server to build the zip or preview.
-                          The public server validates structure but never installs dependencies or starts
-                          generated processes.
+                          Server mode sends the spec to this app&rsquo;s server
+                          to build the zip or preview. The public server
+                          validates structure but never installs dependencies or
+                          starts generated processes.
                         </p>
                       </>
                     )}
@@ -835,8 +1111,12 @@ export default function ExportPage() {
                 <TrustScanPanel
                   report={trustReport}
                   riskAccepted={riskAccepted}
-                  onRiskAcceptedChange={(accepted) => setAcceptedRiskSignature(accepted ? trustSignature : null)}
-                  onDownloadAttestation={() => { void handleDownloadAttestation(); }}
+                  onRiskAcceptedChange={(accepted) =>
+                    setAcceptedRiskSignature(accepted ? trustSignature : null)
+                  }
+                  onDownloadAttestation={() => {
+                    void handleDownloadAttestation();
+                  }}
                 />
               </ResponsiveDisclosure>
 
@@ -847,10 +1127,20 @@ export default function ExportPage() {
                 <details className="border border-border bg-surface">
                   <summary className="min-h-11 cursor-pointer list-none px-4 py-3 text-xs font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2">
                     Open request sandbox
-                    <span className="ml-2 font-normal text-muted-foreground">Inspect, mock, or execute one selected tool</span>
+                    <span className="ml-2 font-normal text-muted-foreground">
+                      Inspect, mock, or execute one selected tool
+                    </span>
                   </summary>
                   <div className="border-t border-border p-4">
-                    <RequestSandbox tools={generationPlan.tools} baseUrl={spec.baseUrl} authConfig={authConfig} />
+                    {generationPlan ? (
+                      <RequestSandbox
+                        tools={generationPlan.tools}
+                        baseUrl={spec.baseUrl}
+                        authConfig={authConfig}
+                      />
+                    ) : (
+                      <p role="status">Checking export configuration…</p>
+                    )}
                   </div>
                 </details>
               </ResponsiveDisclosure>
@@ -863,17 +1153,40 @@ export default function ExportPage() {
                   <div className="flex items-start gap-3">
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
                     <div className="space-y-2 text-xs">
-                      <p className="font-semibold text-foreground">Every download includes machine-readable provenance.</p>
-                      <p className="leading-relaxed text-muted-foreground">The archive contains a CycloneDX 1.5 SBOM, exact direct-dependency and runtime pins, license summary, weekly Dependabot updates, build provenance, the mcpmint manifest, and a registry-ready server declaration.</p>
+                      <p className="font-semibold text-foreground">
+                        Every download includes machine-readable provenance.
+                      </p>
+                      <p className="leading-relaxed text-muted-foreground">
+                        The archive contains a CycloneDX 1.5 SBOM, exact
+                        direct-dependency and runtime pins, license summary,
+                        weekly Dependabot updates, build provenance, the mcpmint
+                        manifest, and a registry-ready server declaration.
+                      </p>
                       <div className="flex flex-wrap gap-2 text-[9px] uppercase tracking-wider text-primary">
-                        <span className="border border-primary/30 px-2 py-1">mcpmint.sbom.json</span>
-                        <span className="border border-primary/30 px-2 py-1">mcpmint.provenance.json</span>
-                        <span className="border border-primary/30 px-2 py-1">mcpmint.dependencies.lock.json</span>
-                        <span className="border border-primary/30 px-2 py-1">THIRD_PARTY_LICENSES.md</span>
-                        <span className="border border-primary/30 px-2 py-1">mcpmint.manifest.json</span>
-                        <span className="border border-primary/30 px-2 py-1">server.json</span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          mcpmint.sbom.json
+                        </span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          mcpmint.provenance.json
+                        </span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          mcpmint.dependencies.lock.json
+                        </span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          THIRD_PARTY_LICENSES.md
+                        </span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          mcpmint.manifest.json
+                        </span>
+                        <span className="border border-primary/30 px-2 py-1">
+                          server.json
+                        </span>
                       </div>
-                      <p className="text-[10px] leading-relaxed text-muted-foreground">Trust Scan attestation is downloaded separately so risk acceptance cannot be silently bundled into generated code.</p>
+                      <p className="text-[10px] leading-relaxed text-muted-foreground">
+                        Trust Scan attestation is downloaded separately so risk
+                        acceptance cannot be silently bundled into generated
+                        code.
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -885,19 +1198,38 @@ export default function ExportPage() {
                     icon={<FileText className="w-4 h-4" />}
                     label="Selected endpoints"
                     value={`${selectedEndpointItems.length} of ${spec.endpoints.length}`}
-                    tone={selectedEndpointItems.length > 0 ? "success" : "warning"}
+                    tone={
+                      selectedEndpointItems.length > 0 ? "success" : "warning"
+                    }
                   />
                   <StatusRow
                     icon={<ShieldCheck className="w-4 h-4" />}
                     label="Detected upstream auth"
-                    value={detectedAuth.length > 0 ? detectedAuth.map((item) => getAuthLabel(item.type)).join(", ") : "None detected"}
+                    value={
+                      detectedAuth.length > 0
+                        ? detectedAuth
+                            .map((item) => getAuthLabel(item.type))
+                            .join(", ")
+                        : "None detected"
+                    }
                     tone={detectedAuth.length > 0 ? "success" : "muted"}
                   />
                   <StatusRow
                     icon={<ShieldCheck className="w-4 h-4" />}
                     label="MCP server access"
-                    value={formatMcpServerAuthConfig(mcpServerAuthConfig, serverConfig.transport)}
-                    tone={serverConfig.transport === "stdio" ? "muted" : exportConfig.language === "python" ? "warning" : mcpServerAuthConfig.type === "none" ? "warning" : "success"}
+                    value={formatMcpServerAuthConfig(
+                      mcpServerAuthConfig,
+                      serverConfig.transport,
+                    )}
+                    tone={
+                      serverConfig.transport === "stdio"
+                        ? "muted"
+                        : exportConfig.language === "python"
+                          ? "warning"
+                          : mcpServerAuthConfig.type === "none"
+                            ? "warning"
+                            : "success"
+                    }
                   />
                   <StatusRow
                     icon={<Cpu className="w-4 h-4" />}
@@ -909,7 +1241,13 @@ export default function ExportPage() {
                     icon={<CheckCircle2 className="w-4 h-4" />}
                     label="Trust scan"
                     value={`${trustReport.verdict.toUpperCase()} · ${trustReport.score}/100${riskAccepted ? " · risk accepted" : ""}`}
-                    tone={trustReport.verdict === "green" ? "success" : trustReport.verdict === "yellow" ? "warning" : "danger"}
+                    tone={
+                      trustReport.verdict === "green"
+                        ? "success"
+                        : trustReport.verdict === "yellow"
+                          ? "warning"
+                          : "danger"
+                    }
                   />
                 </div>
 
@@ -919,11 +1257,16 @@ export default function ExportPage() {
                     Warnings before generation
                   </div>
                   {preGenerationWarnings.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No blocking readiness warnings detected.</p>
+                    <p className="text-xs text-muted-foreground">
+                      No blocking readiness warnings detected.
+                    </p>
                   ) : (
                     <ul className="space-y-2">
                       {preGenerationWarnings.map((warning) => (
-                        <li key={warning} className="border border-border px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+                        <li
+                          key={warning}
+                          className="border border-border px-3 py-2 text-xs text-muted-foreground leading-relaxed"
+                        >
                           {warning}
                         </li>
                       ))}
@@ -970,29 +1313,40 @@ export default function ExportPage() {
               {previewFiles.length === 0 ? (
                 <div className="h-full overflow-y-auto px-6 py-6">
                   <div className="mb-6">
-                    <h2 className="text-sm font-semibold tracking-tight">Selected endpoints</h2>
+                    <h2 className="text-sm font-semibold tracking-tight">
+                      Selected endpoints
+                    </h2>
                     <div className="mt-3 space-y-2">
                       {selectedEndpointItems.slice(0, 8).map((endpoint) => (
-                        <EndpointRow key={endpoint.id} label={endpoint.label} toolName={endpoint.toolName} />
+                        <EndpointRow
+                          key={endpoint.id}
+                          label={endpoint.label}
+                          toolName={endpoint.toolName}
+                        />
                       ))}
                       {selectedEndpointItems.length > 8 && (
-                        <p className="text-[11px] text-muted-foreground">+{selectedEndpointItems.length - 8} more selected</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          +{selectedEndpointItems.length - 8} more selected
+                        </p>
                       )}
                     </div>
                   </div>
 
                   <div className="mb-6">
-                    <h2 className="text-sm font-semibold tracking-tight">Unsupported / manual review</h2>
+                    <h2 className="text-sm font-semibold tracking-tight">
+                      Unsupported / manual review
+                    </h2>
                     <ManualReviewList items={manualReviewEndpoints} />
                   </div>
 
                   <div className="flex items-center justify-center text-center py-14 border-t border-border">
                     <div className="space-y-3">
-                    <Terminal className="w-8 h-8 text-muted-foreground/30 mx-auto" />
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      Click &ldquo;Refresh&rdquo; to generate<br />
-                      a live file preview{browserMode ? " (in-browser, private)" : ""}
-                    </p>
+                      <Terminal className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Click &ldquo;Refresh&rdquo; to generate
+                        <br />a live file preview
+                        {browserMode ? " (in-browser, private)" : ""}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -1002,27 +1356,35 @@ export default function ExportPage() {
                     <div className="border-b border-border px-6 py-4 text-[10px] tracking-wider uppercase text-muted-foreground space-y-3">
                       <div className="flex items-center gap-2 text-foreground">
                         <Layers3 className="w-3.5 h-3.5 text-primary" />
-                        <span>Generator v{previewData.manifest.generatorVersion}</span>
+                        <span>
+                          Generator v{previewData.manifest.generatorVersion}
+                        </span>
                         <span className="text-primary/20">·</span>
                         <span>{previewData.manifest.toolCount} tools</span>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {Object.entries(previewData.manifest.features).map(([feature, enabled]) => (
-                          <Badge
-                            key={feature}
-                            variant="outline"
-                            className={`text-[9px] border px-1.5 py-0 ${enabled ? "border-primary/40 text-primary" : "border-border text-muted-foreground"}`}
-                          >
-                            {feature}
-                          </Badge>
-                        ))}
+                        {Object.entries(previewData.manifest.features).map(
+                          ([feature, enabled]) => (
+                            <Badge
+                              key={feature}
+                              variant="outline"
+                              className={`text-[9px] border px-1.5 py-0 ${enabled ? "border-primary/40 text-primary" : "border-border text-muted-foreground"}`}
+                            >
+                              {feature}
+                            </Badge>
+                          ),
+                        )}
                       </div>
                       {previewWarnings.length > 0 && (
                         <div className="space-y-1">
                           <div className="text-amber-500">Warnings</div>
                           {previewWarnings.slice(0, 5).map((issue, index) => (
-                            <div key={`${issue.message}-${index}`} className="normal-case tracking-normal text-[11px] leading-relaxed">
-                              {issue.path ? `${issue.path}: ` : ""}{issue.message}
+                            <div
+                              key={`${issue.message}-${index}`}
+                              className="normal-case tracking-normal text-[11px] leading-relaxed"
+                            >
+                              {issue.path ? `${issue.path}: ` : ""}
+                              {issue.message}
                             </div>
                           ))}
                         </div>
@@ -1032,51 +1394,72 @@ export default function ExportPage() {
                   <div className="border-b border-border px-6 py-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <h2 className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground mb-2">Selected endpoints</h2>
+                        <h2 className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground mb-2">
+                          Selected endpoints
+                        </h2>
                         <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
                           {selectedEndpointItems.map((endpoint) => (
-                            <EndpointRow key={endpoint.id} label={endpoint.label} toolName={endpoint.toolName} compact />
+                            <EndpointRow
+                              key={endpoint.id}
+                              label={endpoint.label}
+                              toolName={endpoint.toolName}
+                              compact
+                            />
                           ))}
                         </div>
                       </div>
                       <div>
-                        <h2 className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground mb-2">Unsupported / manual review</h2>
-                        <ManualReviewList items={manualReviewEndpoints} compact />
+                        <h2 className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground mb-2">
+                          Unsupported / manual review
+                        </h2>
+                        <ManualReviewList
+                          items={manualReviewEndpoints}
+                          compact
+                        />
                       </div>
                     </div>
                   </div>
-                <Tabs defaultValue={previewFiles[0]?.name} className="flex flex-col h-full">
-                  <TabsList className="flex-wrap h-auto gap-0 bg-background border-b border-border px-4 py-0 rounded-none">
+                  <Tabs
+                    defaultValue={previewFiles[0]?.name}
+                    className="flex flex-col h-full"
+                  >
+                    <TabsList className="flex-wrap h-auto gap-0 bg-background border-b border-border px-4 py-0 rounded-none">
+                      {previewFiles.map((f) => (
+                        <TabsTrigger
+                          key={f.name}
+                          value={f.name}
+                          className="text-[10px] px-3 py-2.5 tracking-wider data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
+                        >
+                          {f.name}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
                     {previewFiles.map((f) => (
-                      <TabsTrigger
+                      <TabsContent
                         key={f.name}
                         value={f.name}
-                        className="text-[10px] px-3 py-2.5 tracking-wider data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
+                        className="flex-1 m-0"
                       >
-                        {f.name}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  {previewFiles.map((f) => (
-                    <TabsContent key={f.name} value={f.name} className="flex-1 m-0">
-                      <div className="relative h-full">
-                        <div className="absolute right-3 top-3 z-10">
-                          <CopyButton value={f.content} />
+                        <div className="relative h-full">
+                          <div className="absolute right-3 top-3 z-10">
+                            <CopyButton value={f.content} />
+                          </div>
+                          <pre className="p-4 overflow-auto h-full text-[11px] leading-5 bg-background">
+                            <code>{f.content}</code>
+                          </pre>
                         </div>
-                        <pre className="p-4 overflow-auto h-full text-[11px] leading-5 bg-background">
-                          <code>{f.content}</code>
-                        </pre>
-                      </div>
-                    </TabsContent>
-                  ))}
-                </Tabs>
+                      </TabsContent>
+                    ))}
+                  </Tabs>
                 </div>
               )}
             </div>
 
             {/* Summary strip */}
             <div className="px-6 py-3 border-t border-border flex items-center gap-4 text-[10px] text-muted-foreground tracking-wider uppercase">
-              <span>{exportConfig.language === "node" ? "TypeScript" : "Python"}</span>
+              <span>
+                {exportConfig.language === "node" ? "TypeScript" : "Python"}
+              </span>
               <span className="text-primary/20">·</span>
               <span>{getTransportLabel(serverConfig.transport)}</span>
               <span className="text-primary/20">·</span>
@@ -1088,9 +1471,18 @@ export default function ExportPage() {
               <span className="text-primary/20">·</span>
               <span>{formatAuthConfig(authConfig)}</span>
               <span className="text-primary/20">·</span>
-              <span>{formatMcpServerAuthConfig(mcpServerAuthConfig, serverConfig.transport)}</span>
+              <span>
+                {formatMcpServerAuthConfig(
+                  mcpServerAuthConfig,
+                  serverConfig.transport,
+                )}
+              </span>
               <span className="text-primary/20">·</span>
-              <span>{previewData?.manifest?.generatorVersion ? `v${previewData.manifest.generatorVersion}` : "preview"}</span>
+              <span>
+                {previewData?.manifest?.generatorVersion
+                  ? `v${previewData.manifest.generatorVersion}`
+                  : "preview"}
+              </span>
             </div>
           </div>
         </div>
@@ -1101,18 +1493,27 @@ export default function ExportPage() {
             <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground/70" />
             {browserMode ? (
               <p>
-                Privacy mode is on. Your spec is processed entirely in your browser to generate the code and build the zip; it is never sent to any server. Nothing is uploaded, stored, or shared.
+                Privacy mode is on. Preview and ZIP generation stay in your
+                browser worker. Your working project is saved in this browser.
+                URL import uses a server fetch, and live tests send requests to
+                your API.
               </p>
             ) : (
               <p>
-                Your spec is sent to this app&rsquo;s server only to generate the code, processed in memory, and returned as a zip. It is not stored or persisted server-side. Generation runs entirely on our server; nothing is shared with third parties.
+                Your spec is sent to this app&rsquo;s server only to generate
+                the code, processed in memory, and returned as a zip. It is not
+                stored or persisted server-side. Generation runs entirely on our
+                server; nothing is shared with third parties.
               </p>
             )}
           </div>
           <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between">
             <Button
               variant="ghost"
-              onClick={() => { setCurrentStep("editor"); router.push("/editor"); }}
+              onClick={() => {
+                setCurrentStep("editor");
+                router.push("/editor");
+              }}
               className="text-xs text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="w-3.5 h-3.5 mr-2" />
@@ -1121,7 +1522,9 @@ export default function ExportPage() {
 
             <div className="flex items-center gap-4">
               {error && (
-                <span className="text-[11px] text-red tracking-wider">{error}</span>
+                <span className="text-[11px] text-red tracking-wider">
+                  {error}
+                </span>
               )}
 
               {!canGenerate && !isGenerating && (
@@ -1130,9 +1533,9 @@ export default function ExportPage() {
                     ? "No tools selected"
                     : !trustDownloadAllowed
                       ? "Trust Scan acknowledgement required"
-                    : !isAuthValid
-                      ? "Authentication settings are incomplete"
-                      : "Complete all fields"}
+                      : !isAuthValid
+                        ? "Authentication settings are incomplete"
+                        : "Complete all fields"}
                 </span>
               )}
 
@@ -1163,12 +1566,16 @@ export default function ExportPage() {
 
 /* ─── Reusable sub-components ─── */
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="py-8 border-b-2 border-primary/20">
-      <h2 className="text-lg font-semibold tracking-tight mb-5">
-        {title}
-      </h2>
+      <h2 className="text-lg font-semibold tracking-tight mb-5">{title}</h2>
       {children}
     </div>
   );
@@ -1183,17 +1590,37 @@ function ResponsiveDisclosure({
   description: string;
   children: React.ReactNode;
 }) {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const update = () => setDesktop(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   return (
-    <details className="progressive-section border-b-2 border-primary/20">
+    <details
+      className="progressive-section border-b-2 border-primary/20"
+      open={desktop || undefined}
+    >
       <summary className="flex min-h-20 cursor-pointer list-none items-center justify-between gap-4 py-5 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2 lg:hidden">
         <span>
-          <span className="block text-base font-semibold text-foreground">{title}</span>
-          <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">{description}</span>
+          <span className="block text-base font-semibold text-foreground">
+            {title}
+          </span>
+          <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+            {description}
+          </span>
         </span>
-        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-primary transition-transform duration-200" />
+        <ChevronDown
+          aria-hidden="true"
+          className="size-4 shrink-0 text-primary transition-transform duration-200"
+        />
       </summary>
       <div className="progressive-section__body py-8">
-        <h2 className="mb-5 hidden text-lg font-semibold tracking-tight lg:block">{title}</h2>
+        <h2 className="mb-5 hidden text-lg font-semibold tracking-tight lg:block">
+          {title}
+        </h2>
         {children}
       </div>
     </details>
@@ -1212,7 +1639,12 @@ function Field({
   const id = useId();
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id} className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">{label}</Label>
+      <Label
+        htmlFor={id}
+        className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
+      >
+        {label}
+      </Label>
       <Input
         id={id}
         value={value}
@@ -1243,9 +1675,10 @@ function LangCard({
       onClick={onClick}
       className={`
         p-5 border-2 text-left transition-all relative
-        ${selected
-          ? "border-primary bg-primary/[0.04]"
-          : "border-border hover:border-muted-foreground"
+        ${
+          selected
+            ? "border-primary bg-primary/[0.04]"
+            : "border-border hover:border-muted-foreground"
         }
       `}
     >
@@ -1260,9 +1693,7 @@ function LangCard({
       >
         {tag}
       </div>
-      <div className="text-base font-semibold tracking-tight">
-        {label}
-      </div>
+      <div className="text-base font-semibold tracking-tight">{label}</div>
     </button>
   );
 }
@@ -1283,10 +1714,19 @@ function FeatureToggle({
   return (
     <div className="flex items-center justify-between gap-4 border border-border px-4 py-3">
       <div className="space-y-1">
-        <Label htmlFor={id} className="text-sm font-medium">{label}</Label>
-        <p id={descriptionId} className="text-[11px] text-muted-foreground">{description}</p>
+        <Label htmlFor={id} className="text-sm font-medium">
+          {label}
+        </Label>
+        <p id={descriptionId} className="text-[11px] text-muted-foreground">
+          {description}
+        </p>
       </div>
-      <Switch id={id} aria-describedby={descriptionId} checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch
+        id={id}
+        aria-describedby={descriptionId}
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+      />
     </div>
   );
 }
@@ -1313,8 +1753,12 @@ function StatusRow({
     <div className={`flex items-start gap-3 border px-3 py-3 ${toneClass}`}>
       <div className="mt-0.5">{icon}</div>
       <div className="min-w-0">
-        <p className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground">{label}</p>
-        <p className="text-xs text-foreground mt-1 leading-relaxed break-words">{value}</p>
+        <p className="text-[10px] tracking-[0.18em] uppercase text-muted-foreground">
+          {label}
+        </p>
+        <p className="text-xs text-foreground mt-1 leading-relaxed break-words">
+          {value}
+        </p>
       </div>
     </div>
   );
@@ -1330,23 +1774,32 @@ function EndpointRow({
   compact?: boolean;
 }) {
   const [method, ...pathParts] = label.split(" ");
-  const methodTone = {
-    GET: "text-primary border-primary/30",
-    POST: "text-blue-500 border-blue-500/30",
-    PUT: "text-amber-500 border-amber-500/30",
-    PATCH: "text-amber-500 border-amber-500/30",
-    DELETE: "text-red border-red/30",
-  }[method] || "text-muted-foreground border-border";
+  const methodTone =
+    {
+      GET: "text-primary border-primary/30",
+      POST: "text-blue-500 border-blue-500/30",
+      PUT: "text-amber-500 border-amber-500/30",
+      PATCH: "text-amber-500 border-amber-500/30",
+      DELETE: "text-red border-red/30",
+    }[method] || "text-muted-foreground border-border";
 
   return (
-    <div className={`border border-border ${compact ? "px-2 py-1.5" : "px-3 py-2"}`}>
+    <div
+      className={`border border-border ${compact ? "px-2 py-1.5" : "px-3 py-2"}`}
+    >
       <div className="flex items-center gap-2 min-w-0">
-        <span className={`shrink-0 border px-1.5 py-0.5 text-[9px] font-semibold tracking-wider ${methodTone}`}>
+        <span
+          className={`shrink-0 border px-1.5 py-0.5 text-[9px] font-semibold tracking-wider ${methodTone}`}
+        >
           {method}
         </span>
-        <span className="truncate text-xs text-foreground">{pathParts.join(" ") || label}</span>
+        <span className="truncate text-xs text-foreground">
+          {pathParts.join(" ") || label}
+        </span>
       </div>
-      <p className="mt-1 truncate text-[10px] text-muted-foreground">{toolName}</p>
+      <p className="mt-1 truncate text-[10px] text-muted-foreground">
+        {toolName}
+      </p>
     </div>
   );
 }
@@ -1360,7 +1813,9 @@ function ManualReviewList({
 }) {
   if (items.length === 0) {
     return (
-      <div className={`border border-border text-muted-foreground ${compact ? "px-2 py-2 text-[10px]" : "px-3 py-3 text-xs"}`}>
+      <div
+        className={`border border-border text-muted-foreground ${compact ? "px-2 py-2 text-[10px]" : "px-3 py-3 text-xs"}`}
+      >
         No selected endpoints require manual review.
       </div>
     );
@@ -1369,15 +1824,23 @@ function ManualReviewList({
   return (
     <div className="space-y-2">
       {items.map((item) => (
-        <div key={item.id} className={`border border-amber-500/30 ${compact ? "px-2 py-2" : "px-3 py-3"}`}>
+        <div
+          key={item.id}
+          className={`border border-amber-500/30 ${compact ? "px-2 py-2" : "px-3 py-3"}`}
+        >
           <div className="flex items-center gap-2 min-w-0">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
             <p className="truncate text-xs text-foreground">{item.label}</p>
           </div>
-          <p className="mt-1 truncate text-[10px] text-muted-foreground">{item.toolName}</p>
+          <p className="mt-1 truncate text-[10px] text-muted-foreground">
+            {item.toolName}
+          </p>
           <ul className="mt-2 space-y-1">
             {item.reasons.slice(0, compact ? 1 : 3).map((reason) => (
-              <li key={reason} className="text-[10px] leading-relaxed text-muted-foreground">
+              <li
+                key={reason}
+                className="text-[10px] leading-relaxed text-muted-foreground"
+              >
                 {reason}
               </li>
             ))}
@@ -1392,7 +1855,9 @@ function ManualReviewList({
 
 function InlineCode({ children }: { children: React.ReactNode }) {
   return (
-    <code className="text-[11px] bg-surface border border-border px-1 py-0.5 text-foreground">{children}</code>
+    <code className="text-[11px] bg-surface border border-border px-1 py-0.5 text-foreground">
+      {children}
+    </code>
   );
 }
 
@@ -1421,11 +1886,16 @@ function SuccessView({
             Your MCP server is ready
           </h1>
           <p className="text-sm text-muted-foreground">
-            <span className="text-foreground font-medium">{snapshot.serverName}.zip</span> is downloading to your machine.
-            Follow the steps below to connect it to an MCP client.
+            <span className="text-foreground font-medium">
+              {snapshot.serverName}.zip
+            </span>{" "}
+            is downloading to your machine. Follow the steps below to connect it
+            to an MCP client.
           </p>
           <div className="flex items-center justify-center gap-3 pt-1 text-[10px] tracking-[0.15em] uppercase text-muted-foreground">
-            <span>{snapshot.language === "node" ? "Node.js / TypeScript" : "Python"}</span>
+            <span>
+              {snapshot.language === "node" ? "Node.js / TypeScript" : "Python"}
+            </span>
             <span className="text-primary/20">·</span>
             <span>{getTransportLabel(snapshot.transport)}</span>
             <span className="text-primary/20">·</span>
@@ -1437,11 +1907,13 @@ function SuccessView({
           </div>
           {snapshot.compactMode && (
             <p className="text-[11px] text-muted-foreground leading-relaxed max-w-lg mx-auto">
-              Compact mode is on: the server exposes <InlineCode>list_api_endpoints</InlineCode>,{" "}
+              Compact mode is on: the server exposes{" "}
+              <InlineCode>list_api_endpoints</InlineCode>,{" "}
               <InlineCode>get_api_endpoint_schema</InlineCode>, and{" "}
-              <InlineCode>invoke_api_endpoint</InlineCode>; the model discovers and calls your{" "}
-              {snapshot.toolCount} endpoint{snapshot.toolCount === 1 ? "" : "s"} on demand instead of
-              loading them all into context.
+              <InlineCode>invoke_api_endpoint</InlineCode>; the model discovers
+              and calls your {snapshot.toolCount} endpoint
+              {snapshot.toolCount === 1 ? "" : "s"} on demand instead of loading
+              them all into context.
             </p>
           )}
         </div>
@@ -1455,7 +1927,9 @@ function SuccessView({
             </h2>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Choose the machine and client you actually use. The wizard produces that client&rsquo;s configuration shape and location, validates local absolute paths, and ends with a real connection checkpoint.
+            Choose the machine and client you actually use. The wizard produces
+            that client&rsquo;s configuration shape and location, validates
+            local absolute paths, and ends with a real connection checkpoint.
           </p>
           <InstallationWizard snapshot={snapshot} />
         </section>
@@ -1463,11 +1937,19 @@ function SuccessView({
         {/* Star CTA */}
         <section className="border border-primary/30 bg-primary/[0.04] px-5 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-foreground">Enjoying mcpmint?</p>
-            <p className="text-xs text-muted-foreground">A star helps other developers find it.</p>
+            <p className="text-sm font-medium text-foreground">
+              Enjoying mcpmint?
+            </p>
+            <p className="text-xs text-muted-foreground">
+              A star helps other developers find it.
+            </p>
           </div>
           <Button asChild variant="outline" className="shrink-0 text-xs">
-            <Link href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
+            <Link
+              href={GITHUB_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               <Github className="w-3.5 h-3.5 mr-2" />
               Star on GitHub
             </Link>
@@ -1475,7 +1957,9 @@ function SuccessView({
         </section>
 
         {error && (
-          <p className="text-[11px] text-red tracking-wider text-center">{error}</p>
+          <p className="text-[11px] text-red tracking-wider text-center">
+            {error}
+          </p>
         )}
 
         {/* Actions */}

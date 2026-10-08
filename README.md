@@ -166,3 +166,9 @@ MIT © [Tiwariji-07](https://github.com/Tiwariji-07)
 **[⭐ Star this repo](https://github.com/mcpmint/mcpmint)** if you find it useful!
 
 </div>
+
+### Production readiness and search discovery
+
+See [deployment verification](docs/deployment-verification.md) for production browser checks, security header and rate-limit configuration, and post-deploy crawler/indexing checks. Public guides are served at `/docs`; `/llms.txt` indexes them for compatible agents. Editor and Export are session pages and excluded from search indexing.
+
+Browser imports accept JSON/YAML specifications up to 5 MiB and 10,000 operations. Each server exports at most 500 selected tools. Processing, validation, preview and compression run in a dedicated worker, while the editor displays 100 endpoints per page. External schema references must be bundled locally before import. Portable project files have a separate 20 MiB budget. Sessions and named projects use IndexedDB, with migration from legacy localStorage and a visible recovery notice if browser storage fails.
