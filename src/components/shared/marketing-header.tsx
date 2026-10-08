@@ -25,6 +25,7 @@ export function MarketingHeader() {
           >
             Documentation
           </Link>
+          <Link href="/guide" className="px-2 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">Quickstart</Link>
           <ThemeToggle />
           <Button variant="ghost" size="icon" asChild>
             <a

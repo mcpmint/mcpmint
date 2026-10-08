@@ -53,7 +53,7 @@ test("external and missing references fail without network access", () => {
       resolveLocalReferences({
         schema: { $ref: "https://example.com/private-schema.json" },
       }),
-    /External references are not fetched/,
+    /External schema references are not fetched/,
   );
   assert.throws(
     () => resolveLocalReferences({ schema: { $ref: "#/missing" } }),

@@ -34,7 +34,7 @@ function makeNodeProject(): GeneratedProject {
                     test: "node tests/manifest.test.js",
                 },
                 dependencies: {
-                    "@modelcontextprotocol/sdk": "1.29.0",
+                    "@modelcontextprotocol/sdk": "1.32.1",
                 },
             }, null, 2)],
             ["tsconfig.json", JSON.stringify({ compilerOptions: {}, include: ["src/**/*"] }, null, 2)],

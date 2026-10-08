@@ -34,7 +34,10 @@ const fixture = {
 } satisfies PortableProjectFile;
 
 test("round trips a portable project file", () => {
-    assert.deepEqual(parseProjectFile(serializeProjectFile(fixture)), fixture);
+    const parsed = parseProjectFile(serializeProjectFile(fixture));
+    assert.deepEqual(parsed.project, fixture.project);
+    assert.deepEqual(parsed.data.spec.apiModel, fixture.data.spec.apiModel);
+    assert.equal(parsed.data.spec.info.title, "Billing");
 });
 
 test("rejects malformed, unsupported, and legacy project files", () => {
@@ -52,9 +55,39 @@ test("rejects corrupted project configuration and endpoint references", () => {
     assert.throws(() => parseProjectFile(JSON.stringify(invalidModel)), /array/);
 });
 
-test("portable endpoint display metadata must agree with its canonical operation", () => {
-    const invalid = JSON.parse(JSON.stringify(fixture)) as PortableProjectFile;
-    invalid.data.spec.endpoints.push({ id: "one", method: "GET", path: "/display", parameters: [] });
-    invalid.data.spec.apiModel!.operations.push({ id: "one", method: "POST", path: "/actual", parameters: [], responses: [] });
-    assert.throws(() => parseProjectFile(JSON.stringify(invalid)), /methods and paths/);
+test("portable display metadata is rebuilt from the canonical API model", () => {
+    const file = structuredClone(fixture) as PortableProjectFile;
+    file.project.endpointCount = 1;
+    file.data.spec.endpoints.push({ id: "one", method: "GET", path: "/stale", parameters: [] });
+    file.data.spec.apiModel!.operations.push({ id: "one", method: "POST", path: "/actual", parameters: [], responses: [] });
+    const parsed = parseProjectFile(JSON.stringify(file));
+    assert.equal(parsed.data.spec.endpoints[0].method, "POST");
+    assert.equal(parsed.data.spec.endpoints[0].path, "/actual");
+    file.project.endpointCount = 2;
+    assert.throws(() => parseProjectFile(JSON.stringify(file)), /endpoint count/);
+});
+
+test("rejects deep configuration and dangling tool references before importing", () => {
+    const badModel = structuredClone(fixture);
+    (badModel.data.spec as unknown as { apiModel: object }).apiModel = {};
+    assert.throws(() => parseProjectFile(JSON.stringify(badModel)), /configuration is invalid/);
+    const badPort = structuredClone(fixture);
+    badPort.data.serverConfig.port = 0;
+    assert.throws(() => parseProjectFile(JSON.stringify(badPort)), /serverConfig.port/);
+    const dangling = structuredClone(fixture) as PortableProjectFile;
+    dangling.data.tools = [{ endpointId: "GET-/missing", enabled: false, toolName: "missing", description: "", parameters: [] }];
+    assert.throws(() => parseProjectFile(JSON.stringify(dangling)), /refer to unique operations/);
+    const missingAuth = structuredClone(fixture);
+    delete (missingAuth.data as unknown as Record<string, unknown>).authConfig;
+    assert.throws(() => parseProjectFile(JSON.stringify(missingAuth)), /authConfig/);
+});
+
+test("rejects hostile nesting and size without recursing into unbounded input", () => {
+    const deep = structuredClone(fixture) as PortableProjectFile;
+    const schema: Record<string, unknown> = {};
+    let cursor = schema;
+    for (let i = 0; i < 70; i++) { const next = {}; cursor.child = next; cursor = next; }
+    (deep.data.spec.apiModel as unknown as Record<string, unknown>).hostile = schema;
+    assert.throws(() => parseProjectFile(JSON.stringify(deep)), /deeply nested or complex/);
+    assert.throws(() => parseProjectFile(' '.repeat(20 * 1024 * 1024 + 1)), /20 MB/);
 });

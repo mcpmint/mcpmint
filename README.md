@@ -21,7 +21,7 @@ Generate MCP servers in your browser from OpenAPI and Postman specs. File/paste 
 - **Capability-aware selection** — See supported, manual-review, unsupported, auth, and risk classifications; start from Recommended, Read-only, CRUD, or All-supported presets.
 - **Tool configuration** — Edit tool names, descriptions, and parameter details, with import-time validation warnings and per-endpoint review badges surfaced in the editor.
 - **Trust Scan gate** — Scan tool metadata for hidden instructions, poisoning, suspicious parameters, broad permissions, and exfiltration combinations. Red results block download until explicit acknowledgement; export a SHA-256-bound attestation.
-- **Request sandbox** — Inspect exact stored methods and paths, run no-network mocks, or explicitly execute bounded live tests before download.
+- **Request sandbox** — Inspect exact stored methods and paths and run no-network mocks. Execute bounded live tests locally through the CLI or generated server.
 - **Project lifecycle** — Named local projects autosave, can be renamed/deleted/restored, and move between browsers as portable `.mcpmint.json` files.
 - **Spec regeneration** — Import an updated spec into a project, preserve matching customizations, and review added, changed, and removed operation drift.
 - 🪄 **Compact mode (meta-tools)** — For large APIs, emit just 3 meta-tools (`list_api_endpoints` / `get_api_endpoint_schema` / `invoke_api_endpoint`) instead of one tool per endpoint, keeping tool definitions from ballooning the model's context window. A live context-budget token meter shows the cost either way.
@@ -137,10 +137,14 @@ Copy [`.env.example`](./.env.example) and set values in your host (e.g. Vercel):
 | Variable | Purpose | Public deploy |
 |----------|---------|---------------|
 | `NEXT_PUBLIC_SITE_URL` | Canonical site URL for SEO/metadata | Set to your domain |
-| `UPSTASH_REDIS_REST_URL` / `TOKEN` | Shared rate limits across isolates | Recommended |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Shared rate limits across isolates | Recommended |
 | `MCPMINT_RATE_LIMIT_MAX` | Requests per IP per minute (default 20) | Optional |
+| `NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN` | Public PostHog project token; enables product analytics | Optional |
+| `NEXT_PUBLIC_POSTHOG_HOST` | Project API host: US `https://us.i.posthog.com`, EU `https://eu.i.posthog.com` | Required when analytics is enabled |
 
 Health check: `GET /api/health`.
+
+See [Vercel account migration and PostHog setup](docs/vercel-posthog-setup.md). PostHog uses explicit, filtered workflow events; automatic capture and recording are disabled. Public environment variables are compiled into the browser bundle, so redeploy after changing them.
 
 Default product path generates **and previews in the browser** so specs do not hit the server. Server-side generation remains available when privacy mode is off, but both web paths perform only bounded structural validation. Full process verification is local CLI/CI-only.
 

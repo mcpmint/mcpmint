@@ -96,7 +96,7 @@ export async function removeStored(key: string): Promise<void> {
     /* IndexedDB removal succeeded. */
   }
 }
-export function createProjectStorage<S>(): PersistStorage<S> {
+export function createProjectStorage<S>(validate?: (state: S) => Promise<S>): PersistStorage<S> {
   let pending: { key: string; value: unknown } | undefined;
   let queued = false;
   let previous: Parameters<PersistStorage<S>["setItem"]>[1] | undefined;
@@ -119,7 +119,9 @@ export function createProjectStorage<S>(): PersistStorage<S> {
   return {
     async getItem(key) {
       try {
-        return await readStored(key);
+        const stored = await readStored<Parameters<PersistStorage<S>["setItem"]>[1]>(key);
+        if (stored && validate) return { ...stored, state: await validate(stored.state) };
+        return stored;
       } catch {
         report("error");
         return null;

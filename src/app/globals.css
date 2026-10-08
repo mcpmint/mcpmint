@@ -588,11 +588,6 @@
     transform: rotate(180deg);
   }
 
-  @media (min-width: 64rem) {
-    .progressive-section > .progressive-section__body {
-      display: block !important;
-    }
-  }
 
   /* ── Scrollbar — minimal ── */
   ::-webkit-scrollbar {

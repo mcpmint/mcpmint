@@ -282,7 +282,7 @@ function normalizeMcpServerAuthConfig(
 
 // Generate unique ID
 function generateId(): string {
-    return Math.random().toString(36).substring(2, 9);
+    return crypto.randomUUID();
 }
 
 function snapshotFromState(state: ProjectState): ProjectSnapshotData | null {
@@ -372,7 +372,7 @@ export const useProjectStore = create<ProjectState>()(
                     tools: mergedTools,
                     capabilityReport: prepared?.capabilities || null,
                     endpointWarnings: prepared?.warnings || null,
-                    authConfig: inferAuthConfig(nextSpec.securitySchemes),
+                    authConfig: state.authConfig,
                     lastSpecDiff: diff,
                     error: null,
                 });
@@ -455,7 +455,6 @@ export const useProjectStore = create<ProjectState>()(
                 if (!snapshot) return false;
                 const existing = state.savedProjects.find((candidate) =>
                     candidate.id === state.activeProjectId
-                    || (!state.activeProjectId && candidate.source === snapshot.specSource)
                 );
                 const savedAt = Date.now();
                 const projectName = (name ?? state.projectName).trim() || state.spec.info.title || "Untitled project";
@@ -476,7 +475,7 @@ export const useProjectStore = create<ProjectState>()(
                     await writeProjectSnapshot(project.id, snapshot);
                 } catch (e) {
                     console.error("Failed to save project:", e);
-                    set({ error: "Your download succeeded, but this project could not be saved to browser history. Check private-browsing or storage settings." });
+                    set({ error: "This project could not be saved to browser history. Export a project file or download the server to keep a copy, and check browser storage settings." });
                     return false;
                 }
 
@@ -616,16 +615,15 @@ export const useProjectStore = create<ProjectState>()(
                 try {
                     const file = await runProcessing<PortableProjectFile>(typeof input === "string" ? { action: "project-import", content: input } : { action: "project-validate", project: input });
                     const state = get();
-                    const existing = state.savedProjects.find((project) =>
-                        project.id === file.project.id || project.source === file.project.source
-                    );
-                    const id = existing?.id || file.project.id || generateId();
+                    const id = generateId(); // Import a copy without replacing local work.
                     const savedAt = Date.now();
                     const project: SavedProject = { ...file.project, id, savedAt };
                     let saved = true;
                     try { await writeProjectSnapshot(id, file.data); } catch { saved = false; }
                     const update = upsertProjectHistory(state.savedProjects, project, 50);
-                    for (const evicted of update.evicted) await removeStored(projectStorageKey(evicted.id));
+                    if (saved) for (const evicted of update.evicted) {
+                        try { await removeStored(projectStorageKey(evicted.id)); } catch { /* Keep the successful import when cleanup fails. */ }
+                    }
                     set({
                         spec: file.data.spec,
                         specSource: file.data.specSource,
@@ -672,7 +670,23 @@ export const useProjectStore = create<ProjectState>()(
         {
             // Legacy persist key kept intentionally so existing users' sessions survive the mcpmint rebrand.
             name: "makemcp-storage",
-            storage: createProjectStorage(),
+            storage: createProjectStorage(async (stored) => {
+                const persisted = stored as PersistedProjectState;
+                if (!persisted.spec) return stored;
+                try {
+                    const snapshot = await runProcessing<ProjectSnapshotData>({ action: "snapshot-validate", snapshot: {
+                        spec: persisted.spec, tools: persisted.tools,
+                        authConfig: persisted.authConfig, mcpServerAuthConfig: persisted.mcpServerAuthConfig,
+                        serverConfig: persisted.serverConfig, exportConfig: persisted.exportConfig,
+                        specSource: persisted.specSource || "unknown", specFormat: persisted.specFormat || "openapi",
+                    } });
+                    return { ...persisted, ...snapshot, capabilityReport: null, endpointWarnings: null };
+                } catch {
+                    return { ...persisted, spec: null, tools: [], currentStep: "import", activeProjectId: null,
+                        capabilityReport: null, endpointWarnings: null,
+                        error: "Your previous session is damaged or from an unsupported version. Import the original spec or a valid project file to recover." };
+                }
+            }),
             // v2: the generator requires spec.apiModel (the canonical path is the
             // only path). Sessions persisted before the canonical migration have a
             // spec without apiModel and would throw deep inside generation, so
@@ -714,7 +728,7 @@ export const useProjectStore = create<ProjectState>()(
                     exportConfig: normalizeExportConfig(persisted.exportConfig),
                     mcpServerAuthConfig: normalizeMcpServerAuthConfig(persisted.mcpServerAuthConfig),
                     savedProjects: Array.isArray(persisted.savedProjects)
-                        ? persisted.savedProjects
+                        ? persisted.savedProjects.filter((project) => project && typeof project.id === "string" && typeof project.name === "string" && typeof project.source === "string" && Number.isFinite(project.savedAt) && Number.isFinite(project.endpointCount))
                         : currentState.savedProjects,
                 };
             },

@@ -6,6 +6,10 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { unzipSync } from "fflate";
 const base = process.env.BASE_URL || "http://127.0.0.1:3000";
+const canonicalOrigin = process.env.NEXT_PUBLIC_SITE_URL
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined)
+  || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined)
+  || "http://localhost:3000";
 const results = [];
 let browser;
 let legacySession;
@@ -445,16 +449,18 @@ async function waitForServer() {
   }
   {
     const { c, p } = await fresh();
-    await c.route("https://api.example.com/**", (r) =>
-      r.fulfill({
+    let apiRequests = 0;
+    await c.route("https://api.example.com/**", (r) => {
+      apiRequests++;
+      return r.fulfill({
         status: 200,
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Content-Type": "application/json",
         },
         body: '{"ok":true}',
-      }),
-    );
+      });
+    });
     await upload(p, spec(1));
     await p.waitForURL("**/editor");
     await p.getByRole("button", { name: "Continue", exact: true }).click();
@@ -463,10 +469,12 @@ async function waitForServer() {
       .locator("summary")
       .filter({ hasText: "Open request sandbox" })
       .click();
-    await p.getByRole("button", { name: "Execute live", exact: true }).click();
-    await p.getByText(/"mode": "live"/).waitFor();
+    assert.equal(await p.getByRole("button", { name: "Execute live", exact: true }).count(), 0);
+    await p.getByRole("button", { name: "Run mock", exact: true }).click();
+    await p.getByText(/"mode": "mock"/).waitFor();
     assert.equal((await metrics(p)).violations.length, 0);
-    record("HTTPS live sandbox request is allowed by CSP");
+    assert.equal(apiRequests, 0);
+    record("Browser sandbox runs local mocks without live controls");
     await c.close();
   }
   {
@@ -482,7 +490,7 @@ async function waitForServer() {
       assert.match(await p.title(), new RegExp(title, "i"));
       assert.equal(
         await p.locator("link[rel=canonical]").getAttribute("href"),
-        `https://make-mcp.vercel.app${path === "/" ? "" : path}`,
+        `${canonicalOrigin}${path === "/" ? "" : path}`,
       );
       if (path.startsWith("/docs"))
         assert.ok((await r.text()).includes("browser"));

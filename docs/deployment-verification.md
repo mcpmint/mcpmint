@@ -4,19 +4,19 @@ mcpmint is a Next.js application with prerendered public pages and server API ro
 
 ## Build and application checks
 
-1. Set `NEXT_PUBLIC_SITE_URL` to the actual HTTPS production origin before building. The existing `https://make-mcp.vercel.app` fallback is retained intentionally. Paths, queries and credentials are rejected in this setting. It is a public URL, not a secret.
+1. Set `NEXT_PUBLIC_SITE_URL` to the actual HTTPS production origin before building. Without an explicit origin, Vercel deployment domain variables are used; local builds default to `http://localhost:3000`. Paths, queries and credentials are rejected in this setting. It is a public URL, not a secret.
 2. Use Node 22 or newer, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run test:generator`, `npm run test:workflow`, `npm run test:cli`, and `npm run build`.
 3. Run `npm run test:generated:full` where Node and Python dependency installation is available. This runs the exported sample projects locally; the public app never starts uploaded code.
 4. Run `npm audit --audit-level=low` in the root and CLI directories. Keep their lockfiles committed.
 5. Start the production build with `npm start`. Run `npm run test:production:browser` against it. Install Chromium with `npx playwright install chromium`, or set `BROWSER_PATH` to an installed Chromium executable. Set `BASE_URL` if the server is not at `http://127.0.0.1:3000`. Optional `BROWSER_EVIDENCE_PATH` saves the results and `BROWSER_SCREENSHOT_DIR` saves the mobile capture.
 
-The browser suite uses synthetic files and intercepts external traffic. It verifies the production worker/CSP, 25 MiB rejection, corrupted files, large imports, selection caps, ZIP download, preview, editor/export refresh, recursive schemas, failed browser storage with portable recovery, legacy storage migration, an intercepted HTTPS live request, and public SEO resources.
+The browser suite uses synthetic files and intercepts external traffic. It verifies the production worker/CSP, 25 MiB rejection, corrupted files, large imports, selection caps, ZIP download, preview, editor/export refresh, recursive schemas, failed browser storage with portable recovery, legacy storage migration, no-network request mocks, and public SEO resources.
 
 ## Hosting and API configuration
 
 - Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` as server-only secrets for shared rate limiting across server instances. Without them, the limiter is per instance and best effort. Never prefix credentials with `NEXT_PUBLIC_`.
 - Vercel client-IP headers are trusted only when `VERCEL=1`. On another host, enable `MCPMINT_TRUST_X_FORWARDED_FOR=1` or `MCPMINT_TRUST_X_REAL_IP=1` only if your trusted proxy overwrites the relevant header. Otherwise requests share an `unknown` limiter bucket rather than trusting spoofable headers.
-- Keep the response security headers from `next.config.ts`. Workers require same-origin script access. Browser live requests intentionally permit HTTPS and `localhost` / `127.0.0.1` development servers; the sandbox also enforces the imported base origin, rejects redirects, omits browser credentials and requires acknowledgement for mutations. Upstream CORS still applies.
+- Keep the response security headers from `next.config.ts`. Workers require same-origin script access. The browser sandbox inspects and mocks requests without connecting to user APIs. Connections are restricted to same-origin, fonts and the configured analytics origin. Run live API tests locally through the CLI or generated server.
 - Keep outbound server fetch protections in place: HTTP(S) only, public IPs only, DNS-pinned connections, validation at every redirect, a 10-second budget including DNS, and bounded response bodies. These protections do not require a static export.
 - Verify `/api/health`, successful URL imports, and generation on the deployed host. Use a disposable development API for actual live tests; the automated suite does not send real requests to user APIs.
 - Browser projects are scoped to the site origin. Before moving domains, export portable project backups; IndexedDB cannot migrate automatically across origins.
@@ -38,3 +38,9 @@ OAI-SearchBot controls OpenAI search crawling. GPTBot is a separate training cra
 ## Dependency maintenance notes
 
 The Next.js and YAML dependencies are updated, and the unused Swagger Parser dependency is removed in favor of bounded, local reference resolution. Patched transitive overrides cover `js-yaml`, PostCSS, sharp, the compatible brace-expansion major versions and `@humanfs/node`. Next's ESLint plugin uses only `fast-glob.globSync(..., { onlyDirectories: true })`; its vulnerable micromatch/braces dependency chain is replaced with the compatible `tinyglobby` alias. Linting validates that compatibility. Review these overrides when upstream dependencies remove the affected chains.
+
+## Integration verification before pushing to main
+
+The deployment fixes were merged with main at `96afdb9`, retaining PostHog privacy controls, local-only live testing, installation improvements and the generated MCP SDK security update. The combined production build passed lint, type checks, generator/parser/API/workflow/CLI tests, CLI bundling, and five full generated Node/Python verification cases with dependency auditing enabled. Both app and CLI dependency audits found zero vulnerabilities.
+
+All seven production accessibility/privacy browser tests and all 33 worker, file-boundary, storage, ZIP and SEO browser checks passed. These include a 320-pixel viewport, corrupt-session recovery and refreshes with 6,000 imported endpoints. The earlier remediation evidence JSON records the original fix commit; browser live controls were subsequently removed to preserve main’s privacy model. Canonical origins now use the explicit site setting, Vercel deployment domains, or localhost for local builds.

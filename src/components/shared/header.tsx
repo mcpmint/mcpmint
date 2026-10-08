@@ -59,7 +59,7 @@ export function Header() {
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-background/95">
-      <div className="max-w-[1400px] mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-3">
+      <div className="max-w-[1400px] mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
         {/* Logo */}
         <Link
           href="/"
@@ -75,13 +75,13 @@ export function Header() {
         </Link>
 
         {spec && (
-          <div className="hidden lg:flex min-w-0 max-w-[250px] items-center gap-2 border border-border bg-surface px-2 py-1">
+          <div className="flex min-w-0 w-[135px] lg:w-[250px] items-center gap-2 border border-border bg-surface px-2 py-1">
             <input
               aria-label="Project name"
               value={projectName}
               maxLength={80}
               onChange={(event) => setProjectName(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none focus:text-primary"
+              className="w-12 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none focus:text-primary"
             />
             {activeProjectId ? (
               <span className={`shrink-0 text-[9px] uppercase tracking-wider ${autosaveStatus === "error" ? "text-red" : "text-muted-foreground"}`} role="status">
@@ -166,7 +166,7 @@ export function Header() {
         {/* Right */}
         <div className="flex items-center gap-1">
           <ThemeToggle />
-          <Button variant="ghost" size="icon" asChild>
+          <Button variant="ghost" size="icon" asChild className={spec ? "hidden sm:inline-flex" : ""}>
             <a
               href="https://github.com/mcpmint/mcpmint"
               target="_blank"

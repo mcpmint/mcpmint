@@ -307,3 +307,16 @@ test("generated Node sample passes full verification", () => {
 test("generated Python sample passes full verification", () => {
     assertFullVerificationPassed(createPreviewResponse(generatedPythonSample));
 });
+
+
+test("generated Node compact project passes full verification with default origins", () => {
+    assertFullVerificationPassed(createPreviewResponse({ ...generatedNodeSample, mcpServerAuthConfig: { type: "none", allowedOrigins: [] }, exportConfig: { ...generatedNodeSample.exportConfig, compactMode: true } }));
+});
+
+test("generated Python HTTP project passes full verification with default origins", () => {
+    assertFullVerificationPassed(createPreviewResponse({ ...generatedPythonSample, serverConfig: { ...generatedPythonSample.serverConfig, transport: "http" }, mcpServerAuthConfig: { type: "none", allowedOrigins: [] } }));
+});
+
+test("generated Python compact HTTP project passes full verification", () => {
+    assertFullVerificationPassed(createPreviewResponse({ ...generatedPythonSample, serverConfig: { ...generatedPythonSample.serverConfig, transport: "http" }, exportConfig: { ...generatedPythonSample.exportConfig, compactMode: true } }));
+});

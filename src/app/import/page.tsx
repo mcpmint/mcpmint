@@ -1,5 +1,7 @@
 "use client";
 
+import { trackEvent } from "@/lib/analytics/client";
+
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -69,9 +71,10 @@ export default function ImportPage() {
   // Shared post-parse step for EVERY import path (file / url / paste / sample):
   // run validateSpec() via buildValidationSummary(), stash the concise summary
   // for the editor banner, commit the spec to the store, and advance.
-  const finishImport = (prepared: PreparedImport, source: string) => {
+  const finishImport = (prepared: PreparedImport, source: string, analyticsSource: string, started: number) => {
     stashValidationSummary(prepared.summary);
     setSpec(prepared.spec, source, prepared);
+    trackEvent("import_succeeded", { source: analyticsSource, format: prepared.spec.format || "openapi", duration_ms: performance.now() - started });
     setCurrentStep("editor");
     setLoading(false);
     router.push("/editor");
@@ -79,6 +82,8 @@ export default function ImportPage() {
 
   const handleTrySample = async () => {
     setIsSampleLoading(true);
+    const started = performance.now();
+    trackEvent("import_started", { source: "sample" });
     setLoading(true);
     setError(null);
     try {
@@ -86,8 +91,9 @@ export default function ImportPage() {
       if (!res.ok) throw new Error("Could not load the sample spec");
       const content = await res.text();
       const parsedSpec = await processing.run<PreparedImport>({ action: "parse", content, filename: "petstore.json" });
-      finishImport(parsedSpec, "Petstore (sample)");
+      finishImport(parsedSpec, "Petstore (sample)", "sample", started);
     } catch (err) {
+      trackEvent("import_failed", { source: "sample", duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Failed to load sample");
       setIsSampleLoading(false);
       setLoading(false);
@@ -97,7 +103,10 @@ export default function ImportPage() {
   const onDrop = async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
     const file = acceptedFiles[0];
+    const started = performance.now();
+    trackEvent("import_started", { source: "file" });
     if (file.size > MAX_LOCAL_SPEC_BYTES) {
+      trackEvent("import_failed", { source: "file", duration_ms: performance.now() - started });
       setError("This specification is larger than 5 MB. Split or reduce it before importing to keep browser generation responsive.");
       return;
     }
@@ -106,8 +115,9 @@ export default function ImportPage() {
     setError(null);
     try {
       const parsedSpec = await processing.run<PreparedImport>({ action: "parse", file, filename: file.name });
-      finishImport(parsedSpec, file.name);
+      finishImport(parsedSpec, file.name, "file", started);
     } catch (err) {
+      trackEvent("import_failed", { source: "file", duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Failed to parse file");
       setLoading(false);
       setIsFileParsing(false);
@@ -126,6 +136,8 @@ export default function ImportPage() {
     maxSize: MAX_LOCAL_SPEC_BYTES,
     noClick: false,
     onDropRejected: (rejections) => {
+      trackEvent("import_started", { source: "file" });
+      trackEvent("import_failed", { source: "file" });
       const tooLarge = rejections.some((rejection) =>
         rejection.errors.some((candidate) => candidate.code === "file-too-large")
       );
@@ -137,13 +149,16 @@ export default function ImportPage() {
 
   const handleUrlFetch = async () => {
     if (!specUrl.trim()) return;
+    const started = performance.now();
+    trackEvent("import_started", { source: "url" });
     setIsUrlFetching(true);
     setLoading(true);
     setError(null);
     try {
       const parsedSpec = await processing.runURL<PreparedImport>(specUrl);
-      finishImport(parsedSpec, specUrl);
+      finishImport(parsedSpec, specUrl, "url", started);
     } catch (err) {
+      trackEvent("import_failed", { source: "url", duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Failed to fetch spec");
       setIsUrlFetching(false);
       setLoading(false);
@@ -152,7 +167,10 @@ export default function ImportPage() {
 
   const handlePasteParse = async () => {
     if (!pastedContent.trim()) return;
+    const started = performance.now();
+    trackEvent("import_started", { source: "paste" });
     if (new TextEncoder().encode(pastedContent).byteLength > MAX_LOCAL_SPEC_BYTES) {
+      trackEvent("import_failed", { source: "paste", duration_ms: performance.now() - started });
       setError("Pasted specifications are limited to 5 MB to keep browser generation responsive.");
       return;
     }
@@ -161,8 +179,9 @@ export default function ImportPage() {
     setError(null);
     try {
       const parsedSpec = await processing.run<PreparedImport>({ action: "parse", content: pastedContent, filename: "pasted-spec" });
-      finishImport(parsedSpec, "Pasted Content");
+      finishImport(parsedSpec, "Pasted Content", "paste", started);
     } catch (err) {
+      trackEvent("import_failed", { source: "paste", duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Failed to parse content");
       setIsPasteParsing(false);
       setLoading(false);
@@ -194,11 +213,16 @@ export default function ImportPage() {
 
   const handleProjectFile = async (file: File | undefined) => {
     if (!file) return;
+    const started = performance.now();
+    trackEvent("import_started", { source: "project" });
     setError(null);
     try {
       const prepared = await processing.run<PortableProjectFile>({ action: "project-import", file });
-      if (await importProject(prepared)) router.push("/editor");
-    } catch (error) { setError(error instanceof Error ? error.message : "Could not read project file."); }
+      if (await importProject(prepared)) {
+        trackEvent("import_succeeded", { source: "project", format: prepared.data.specFormat, duration_ms: performance.now() - started });
+        router.push("/editor");
+      } else trackEvent("import_failed", { source: "project", duration_ms: performance.now() - started });
+    } catch (error) { trackEvent("import_failed", { source: "project", duration_ms: performance.now() - started }); setError(error instanceof Error ? error.message : "Could not read project file."); }
   };
 
   const commitRename = (id: string) => {
@@ -228,14 +252,14 @@ export default function ImportPage() {
       <main className="pt-14 relative z-10 min-h-screen flex flex-col">
         {/* Tab bar */}
         <div className="border-b border-border">
-          <div className="max-w-[1400px] mx-auto px-6 flex items-center justify-between">
+          <div className="max-w-[1400px] mx-auto px-3 sm:px-6 flex flex-wrap items-center justify-between gap-x-2">
             <div className="flex">
               {(["file", "url", "paste"] as ImportTab[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
                   className={`
-                    px-6 py-4 text-[11px] tracking-[0.2em] uppercase transition-colors relative
+                    px-3 sm:px-6 py-4 text-[11px] tracking-[0.2em] uppercase transition-colors relative
                     ${activeTab === tab
                       ? "text-primary"
                       : "text-muted-foreground hover:text-foreground"
@@ -252,6 +276,7 @@ export default function ImportPage() {
 
             <div className="flex items-center gap-4">
               <input
+                aria-label="Import a saved mcpmint project file"
                 ref={projectFileInput}
                 type="file"
                 accept=".json,.mcpmint.json,application/json"

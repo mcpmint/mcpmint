@@ -1,5 +1,8 @@
 "use client";
 
+import { toolCountBucket } from "@/lib/analytics/events";
+import { trackEvent } from "@/lib/analytics/client";
+
 import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -36,8 +39,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CopyButton } from "@/components/ui/copy-button";
+import { FilePreview } from "@/components/export/file-preview";
+import { installationMetadata } from "@/lib/generator/installation";
 import { TrustScanPanel } from "@/components/export/trust-scan-panel";
 import { RequestSandbox } from "@/components/export/request-sandbox";
 import { InstallationWizard } from "@/components/export/installation-wizard";
@@ -220,6 +223,8 @@ interface GeneratedSnapshot {
   baseUrl: string;
   compactMode: boolean;
   toolCount: number;
+  authEnv: Record<string, string>;
+  mcpAuthType: "none" | "bearer";
 }
 
 export default function ExportPage() {
@@ -539,6 +544,8 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
   };
 
   const handleGenerate = async () => {
+    const started = performance.now();
+    const analytics = { language: exportConfig.language, transport: serverConfig.transport, execution: browserMode ? "browser" : "server" };
     setIsGenerating(true);
     setError(null);
     try {
@@ -568,6 +575,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
         const blob = await res.blob();
         triggerDownload(blob, `${serverConfig.name}.zip`);
       }
+      trackEvent("generation_succeeded", { ...analytics, compact: exportConfig.compactMode || false, tool_count: toolCountBucket(selectedTools.length), duration_ms: performance.now() - started });
       if (!(await saveCurrentProject())) {
         setError(
           "The download succeeded, but this project could not be saved to browser history.",
@@ -585,8 +593,10 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
         baseUrl: spec.baseUrl,
         compactMode: exportConfig.compactMode,
         toolCount: selectedTools.length,
+        ...installationMetadata(generationPlan!),
       });
     } catch (err) {
+      trackEvent("generation_failed", { ...analytics, duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setIsGenerating(false);
@@ -603,6 +613,8 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
   };
 
   const handlePreview = async () => {
+    const started = performance.now();
+    const analytics = { language: exportConfig.language, transport: serverConfig.transport, execution: browserMode ? "browser" : "server" };
     setIsPreviewing(true);
     setError(null);
     try {
@@ -642,7 +654,9 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
         const data = (await res.json()) as PreviewData;
         setPreviewResult({ signature: generatorSignature, data });
       }
+      trackEvent("preview_succeeded", { ...analytics, duration_ms: performance.now() - started });
     } catch (err) {
+      trackEvent("preview_failed", { ...analytics, duration_ms: performance.now() - started });
       setError(err instanceof Error ? err.message : "Preview failed");
     } finally {
       setIsPreviewing(false);
@@ -660,6 +674,11 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
           />
         )}
         <main className="pt-14 flex-1 flex flex-col relative z-10">
+        <div className="border-b border-border px-4 sm:px-8 py-3 text-xs text-muted-foreground">
+          <Link href="/guide" className="text-primary underline">Local quickstart and compatibility</Link>
+          <span className="mx-2">·</span><Link href="/privacy" className="underline">Processing and storage</Link>
+          <span className="mx-2">·</span><a href="https://github.com/mcpmint/mcpmint/issues/new?template=generated_server_problem.yml" target="_blank" rel="noopener noreferrer" className="underline">Get help</a>
+        </div>
           <SuccessView
             snapshot={generated}
             onBackToConfig={handleBackToConfig}
@@ -683,10 +702,15 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
       )}
 
       <main className="pt-14 flex-1 flex flex-col relative z-10">
+        <div className="border-b border-border px-4 sm:px-8 py-3 text-xs text-muted-foreground">
+          <Link href="/guide" className="text-primary underline">Local quickstart and compatibility</Link>
+          <span className="mx-2">·</span><Link href="/privacy" className="underline">Processing and storage</Link>
+          <span className="mx-2">·</span><a href="https://github.com/mcpmint/mcpmint/issues/new?template=generated_server_problem.yml" target="_blank" rel="noopener noreferrer" className="underline">Get help</a>
+        </div>
         {/* ═══ Split view ═══ */}
-        <div className="flex-1 flex">
+        <div className="flex-1 flex flex-col lg:flex-row">
           {/* ─── Left: Configuration ─── */}
-          <div className="flex-1 overflow-y-auto border-r border-border">
+          <div className="min-w-0 flex-1 overflow-y-auto border-r border-border">
             <div className="max-w-2xl mx-auto px-4 sm:px-8 py-8 sm:py-10 space-y-0">
               <Section title="Guided setup">
                 <div className="grid gap-2 sm:grid-cols-3">
@@ -704,7 +728,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                       ],
                       [
                         "docker",
-                        "Docker / cloud",
+                        "Docker HTTP",
                         "HTTP · bearer auth · Docker output",
                       ],
                     ] as [GuidedPreset, string, string][]
@@ -737,7 +761,6 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                   <LangCard
                     label="Node.js"
                     tag="TS"
-                    tagColor="#339933"
                     selected={exportConfig.language === "node"}
                     onClick={() =>
                       setExportConfig({
@@ -750,7 +773,6 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                   <LangCard
                     label="Python"
                     tag="PY"
-                    tagColor="#3776AB"
                     selected={exportConfig.language === "python"}
                     onClick={() =>
                       setExportConfig({
@@ -1055,7 +1077,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                     )}
 
                     {mcpServerAuthConfig.type === "none" && (
-                      <div className="border border-amber-500/30 px-3 py-2 text-[11px] leading-relaxed text-amber-500">
+                      <div className="border border-amber-500/30 px-3 py-2 text-[11px] leading-relaxed text-amber">
                         HTTP/SSE MCP server access has no bearer token
                         configured. Prefer localhost binding unless another
                         layer authenticates clients.
@@ -1122,13 +1144,13 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
 
               <ResponsiveDisclosure
                 title="Test before download"
-                description="Inspect, mock, or execute one selected tool"
+                description="Inspect and mock one selected tool; verify live calls locally"
               >
                 <details className="border border-border bg-surface">
                   <summary className="min-h-11 cursor-pointer list-none px-4 py-3 text-xs font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2">
                     Open request sandbox
                     <span className="ml-2 font-normal text-muted-foreground">
-                      Inspect, mock, or execute one selected tool
+                      Inspect and mock one selected tool; verify live calls locally
                     </span>
                   </summary>
                   <div className="border-t border-border p-4">
@@ -1154,13 +1176,10 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
                     <div className="space-y-2 text-xs">
                       <p className="font-semibold text-foreground">
-                        Every download includes machine-readable provenance.
+                        Every download includes a generation record and direct-dependency inventory.
                       </p>
                       <p className="leading-relaxed text-muted-foreground">
-                        The archive contains a CycloneDX 1.5 SBOM, exact
-                        direct-dependency and runtime pins, license summary,
-                        weekly Dependabot updates, build provenance, the mcpmint
-                        manifest, and a registry-ready server declaration.
+                        The archive includes a direct-dependency SBOM and inventory, runtime pins, license summary, Dependabot configuration, and unsigned generator metadata. Install and commit a package-manager lockfile to cover transitive dependencies. The registry declaration is a template: replace owner/package placeholders and validate it before publishing.
                       </p>
                       <div className="flex flex-wrap gap-2 text-[9px] uppercase tracking-wider text-primary">
                         <span className="border border-primary/30 px-2 py-1">
@@ -1258,7 +1277,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                   </div>
                   {preGenerationWarnings.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
-                      No blocking readiness warnings detected.
+                      No configuration warnings detected. Validate installation and a tool call before use.
                     </p>
                   ) : (
                     <ul className="space-y-2">
@@ -1278,7 +1297,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
           </div>
 
           {/* ─── Right: Preview Panel ─── */}
-          <div className="w-[45%] hidden lg:flex flex-col bg-surface">
+          <div className="min-w-0 w-full lg:w-[45%] flex flex-col bg-surface border-t border-border lg:border-t-0">
             {/* Preview header */}
             <div className="px-6 py-4 border-b border-border flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1377,7 +1396,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                       </div>
                       {previewWarnings.length > 0 && (
                         <div className="space-y-1">
-                          <div className="text-amber-500">Warnings</div>
+                          <div className="text-amber">Warnings</div>
                           {previewWarnings.slice(0, 5).map((issue, index) => (
                             <div
                               key={`${issue.message}-${index}`}
@@ -1419,44 +1438,13 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                       </div>
                     </div>
                   </div>
-                  <Tabs
-                    defaultValue={previewFiles[0]?.name}
-                    className="flex flex-col h-full"
-                  >
-                    <TabsList className="flex-wrap h-auto gap-0 bg-background border-b border-border px-4 py-0 rounded-none">
-                      {previewFiles.map((f) => (
-                        <TabsTrigger
-                          key={f.name}
-                          value={f.name}
-                          className="text-[10px] px-3 py-2.5 tracking-wider data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-                        >
-                          {f.name}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
-                    {previewFiles.map((f) => (
-                      <TabsContent
-                        key={f.name}
-                        value={f.name}
-                        className="flex-1 m-0"
-                      >
-                        <div className="relative h-full">
-                          <div className="absolute right-3 top-3 z-10">
-                            <CopyButton value={f.content} />
-                          </div>
-                          <pre className="p-4 overflow-auto h-full text-[11px] leading-5 bg-background">
-                            <code>{f.content}</code>
-                          </pre>
-                        </div>
-                      </TabsContent>
-                    ))}
-                  </Tabs>
+                  <FilePreview files={previewFiles} />
                 </div>
               )}
             </div>
 
             {/* Summary strip */}
-            <div className="px-6 py-3 border-t border-border flex items-center gap-4 text-[10px] text-muted-foreground tracking-wider uppercase">
+            <div className="px-6 py-3 border-t border-border flex flex-wrap items-center gap-x-4 gap-y-2 text-[10px] text-muted-foreground tracking-wider uppercase">
               <span>
                 {exportConfig.language === "node" ? "TypeScript" : "Python"}
               </span>
@@ -1495,8 +1483,9 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
               <p>
                 Privacy mode is on. Preview and ZIP generation stay in your
                 browser worker. Your working project is saved in this browser.
-                URL import uses a server fetch, and live tests send requests to
-                your API.
+                URL import uses a server fetch. Inspect and mock tools here;
+                run live tests locally through the CLI or generated server.
+                Imported examples can contain secrets; review them before sharing.
               </p>
             ) : (
               <p>
@@ -1507,7 +1496,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
               </p>
             )}
           </div>
-          <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap gap-3 items-center justify-between">
             <Button
               variant="ghost"
               onClick={() => {
@@ -1658,13 +1647,11 @@ function Field({
 function LangCard({
   label,
   tag,
-  tagColor,
   selected,
   onClick,
 }: {
   label: string;
   tag: string;
-  tagColor: string;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -1688,8 +1675,7 @@ function LangCard({
         </div>
       )}
       <div
-        className="text-sm font-bold mb-1 tracking-wide"
-        style={{ color: tagColor }}
+        className="text-sm font-bold mb-1 tracking-wide text-foreground"
       >
         {tag}
       </div>
@@ -1744,7 +1730,7 @@ function StatusRow({
 }) {
   const toneClass = {
     success: "text-primary border-primary/30",
-    warning: "text-amber-500 border-amber-500/30",
+    warning: "text-amber border-amber-500/30",
     danger: "text-red border-red/30",
     muted: "text-muted-foreground border-border",
   }[tone];
@@ -1778,8 +1764,8 @@ function EndpointRow({
     {
       GET: "text-primary border-primary/30",
       POST: "text-blue-500 border-blue-500/30",
-      PUT: "text-amber-500 border-amber-500/30",
-      PATCH: "text-amber-500 border-amber-500/30",
+      PUT: "text-amber border-amber-500/30",
+      PATCH: "text-amber border-amber-500/30",
       DELETE: "text-red border-red/30",
     }[method] || "text-muted-foreground border-border";
 
@@ -1829,7 +1815,7 @@ function ManualReviewList({
           className={`border border-amber-500/30 ${compact ? "px-2 py-2" : "px-3 py-3"}`}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber" />
             <p className="truncate text-xs text-foreground">{item.label}</p>
           </div>
           <p className="mt-1 truncate text-[10px] text-muted-foreground">
@@ -1883,7 +1869,7 @@ function SuccessView({
             <PartyPopper className="w-7 h-7" />
           </div>
           <h1 className="text-3xl font-semibold tracking-tight">
-            Your MCP server is ready
+            Your MCP archive is ready
           </h1>
           <p className="text-sm text-muted-foreground">
             <span className="text-foreground font-medium">

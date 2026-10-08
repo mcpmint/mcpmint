@@ -22,7 +22,7 @@ export function resolveLocalReferences(
       const ref = record.$ref;
       if (!ref.startsWith("#/"))
         throw new Error(
-          "External references are not fetched in private mode. Bundle the specification into one file before importing.",
+          "External schema references are not fetched in private mode. Bundle the specification into one file before importing.",
         );
       if (active.has(ref)) return { $ref: ref };
       let target: unknown = root;

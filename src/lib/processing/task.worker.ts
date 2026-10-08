@@ -69,6 +69,10 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
           data.file ? await data.file.text() : data.content || "",
         );
       } else result = validateProjectFile(data.project);
+    } else if (data.action === "snapshot-validate") {
+      progress("Checking saved session…");
+      const { validateProjectSnapshot } = await import("../../store/project-file");
+      result = validateProjectSnapshot(data.snapshot);
     } else if (data.action === "project-export") {
       progress("Preparing project file…");
       const { serializeProjectFile } = await import("../../store/project-file");
@@ -88,16 +92,12 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
       assertGraphBudget(data.payload);
       const { buildGenerationPlan } = await import("../generator/normalize");
       const { buildToolPlans } = await import("../generator/planner");
-      const { projectToolsToScanTools } =
-        await import("../scanner/from-project");
+      const { generationPlanToScanTools } = await import("../scanner/from-plan");
       const { scanTools } = await import("../scanner");
       const payload =
         data.payload as import("../generator/types").GeneratorRequest;
       const plan = buildGenerationPlan(payload);
-      const trustTools = projectToolsToScanTools(
-        payload.spec.apiModel,
-        payload.tools as import("../../store/project-store").ToolConfig[],
-      );
+      const trustTools = generationPlanToScanTools(plan);
       const selected = new Map(
         payload.tools.map((tool) => [tool.endpointId, tool.toolName]),
       );

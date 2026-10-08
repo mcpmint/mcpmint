@@ -12,7 +12,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=18.17"
+    "node": ">=22"
   },
   "keywords": [
     "mcp",
@@ -43,7 +43,8 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "tsup": "^8.3.5"
+    "tsup": "^8.3.5",
+    "typescript": "^5.9.3"
   },
   "overrides": {
     "esbuild": "0.28.1",

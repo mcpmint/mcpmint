@@ -261,7 +261,7 @@ export default function HomePage() {
                 num: "03",
                 title: "Leave with proof, not promises",
                 desc: "Download a runnable Node.js or Python server with tests, documentation, provenance, dependency pins, and an SBOM.",
-                proof: ["TS or Python", "SBOM included", "Registry ready"],
+                proof: ["TS or Python", "SBOM included", "Registry template"],
               },
             ].map((feature, i) => (
               <div
@@ -271,11 +271,12 @@ export default function HomePage() {
                 }`}
               >
                 {/* Watermark number */}
-                <div className="watermark">{feature.num}</div>
+                <svg aria-hidden="true" className="watermark" width="280" height="220" viewBox="0 0 280 220"><text x="0" y="190" fill="currentColor" fontSize="192">{feature.num}</text></svg>
 
                 {/* Number */}
                 <div
-                  className="shrink-0 text-5xl font-bold text-primary/20 sm:w-20 md:w-28 md:text-7xl"
+                  aria-hidden="true"
+                  className="shrink-0 text-5xl font-bold text-primary sm:w-20 md:w-28 md:text-7xl"
                   style={{ fontFamily: "'Clash Display', sans-serif" }}
                 >
                   {feature.num}
@@ -311,13 +312,15 @@ export default function HomePage() {
             <span className="text-[11px] text-muted-foreground tracking-[0.15em] uppercase">
               mcpmint · MIT Licensed
             </span>
-            <div className="flex gap-6 text-[11px] text-muted-foreground tracking-wider">
+            <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground tracking-wider">
               <a href="https://github.com/mcpmint/mcpmint" target="_blank" rel="noreferrer" className="hover:text-primary transition-colors">
                 GitHub
               </a>
               <a href="/docs" target="_blank" rel="noreferrer" className="hover:text-primary transition-colors">
                 Docs
               </a>
+              <Link href="/guide" className="hover:text-primary">Quickstart</Link>
+              <Link href="/privacy" className="hover:text-primary">Privacy</Link>
             </div>
           </div>
         </footer>

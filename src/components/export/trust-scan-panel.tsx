@@ -77,7 +77,7 @@ export function TrustScanPanel({
               <div className={`text-[10px] uppercase tracking-[0.18em] ${style.text}`}>
                 {report.verdict} verdict
               </div>
-              <div className="mt-1 text-lg font-semibold">Trust score {report.score}/100</div>
+              <div className="mt-1 text-lg font-semibold">Metadata score {report.score}/100</div>
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                 {redCount} blocking · {yellowCount} review · {report.toolCount} tools scanned
               </p>
@@ -90,10 +90,12 @@ export function TrustScanPanel({
         </div>
       </div>
 
+      <p className="text-[11px] leading-relaxed text-muted-foreground">This heuristic scan reviews exported tool metadata. An attestation records that metadata and its findings; it does not verify the whole archive, dependencies, API behavior, or deployment.</p>
+
       {report.findings.length === 0 ? (
         <div className="flex items-center gap-3 border border-green/30 px-3 py-3 text-xs text-green">
           <CheckCircle2 className="size-4" />
-          All five trust checks passed. No suspicious tool metadata was detected.
+          No findings in these five metadata checks. This does not certify the API or generated code as safe.
         </div>
       ) : (
         <div className="space-y-2">

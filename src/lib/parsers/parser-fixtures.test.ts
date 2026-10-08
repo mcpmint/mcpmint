@@ -314,3 +314,15 @@ test("validation distinguishes unknown auth schemes from ambiguous auth", async 
         warning.message.includes("auth schemes that were not found")
     ), false);
 });
+
+test("recursive schemas remain finite and import without a stack overflow", async () => {
+    const content = await readFile(join(fixturesDir, "recursive.openapi.json"), "utf8");
+    const parsed = await parseOpenAPIFromContent(content, "recursive.openapi.json");
+    assert.equal(parsed.endpoints.length, 1);
+    assert.match(JSON.stringify(parsed), /\$ref/);
+});
+
+test("external references are rejected before parser network access", async () => {
+    const content = JSON.stringify({ openapi: "3.1.0", info: { title: "External", version: "1" }, paths: { "/ping": { get: { responses: { "200": { description: "OK", content: { "application/json": { schema: { $ref: "https://unreachable.example/private.json" } } } } } } } } });
+    await assert.rejects(() => parseOpenAPIFromContent(content, "external.json"), /External schema references are not fetched/);
+});

@@ -42,7 +42,7 @@ export function buildManifest(plan: GenerationPlan, language: GeneratedManifest[
 
 export function getEnvExample(plan: GenerationPlan): string {
     const authSchemes = collectAuthSchemes(plan);
-    const lines = [`# Base URL for the API`, `API_BASE_URL=${plan.spec.baseUrl || "https://api.example.com"}`];
+    const lines = [`# Optional override for ALL operation servers. Leave empty to use imported per-operation URLs.`, `API_BASE_URL=`];
 
     if (authSchemes.length > 0) {
         lines.push("", "# Auth");
@@ -97,16 +97,45 @@ function getSchemaType(schema?: Record<string, unknown>): string | undefined {
     return undefined;
 }
 
+function sampleSchema(schema: Record<string, unknown> | undefined, fallback: string, depth = 0): unknown {
+    if (!schema || depth > 20) return fallback;
+    if (schema.example !== undefined) return schema.example;
+    if (schema.const !== undefined) return schema.const;
+    if (schema.default !== undefined) return schema.default;
+    if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
+    const type = getSchemaType(schema);
+    if (schema.format === "binary" || type === "file") return "ZmlsZSBjb250ZW50";
+    if (schema.format === "email") return "test@example.com";
+    if (schema.format === "uuid") return "550e8400-e29b-41d4-a716-446655440000";
+    if (schema.format === "uri" || schema.format === "url") return "https://example.com";
+    if (schema.format === "date") return "2026-01-01";
+    if (schema.format === "date-time") return "2026-01-01T00:00:00Z";
+    if (type === "array") {
+        const length = Math.min(100, Math.max(1, typeof schema.minItems === "number" ? schema.minItems : 2));
+        return Array.from({ length }, (_, index) => sampleSchema(schema.items as Record<string, unknown>, index ? "beta" : "alpha", depth + 1));
+    }
+    if (type === "object" || schema.properties) {
+        const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+        if (!properties) return schema.additionalProperties === false ? {} : { status: "open", owner: "team" };
+        return Object.fromEntries(Object.entries(properties).map(([name, child]) => [name, sampleSchema(child, `${name}-value`, depth + 1)]));
+    }
+    if (type === "integer" || type === "number") {
+        let value = typeof schema.minimum === "number" ? schema.minimum : 42;
+        if (schema.exclusiveMinimum === true) value += 1;
+        if (typeof schema.exclusiveMinimum === "number") value = schema.exclusiveMinimum + 1;
+        if (typeof schema.maximum === "number") value = Math.min(value, schema.maximum);
+        if (typeof schema.multipleOf === "number" && schema.multipleOf > 0) value = Math.ceil(value / schema.multipleOf) * schema.multipleOf;
+        return value;
+    }
+    if (type === "boolean") return true;
+    let value = fallback;
+    if (typeof schema.minLength === "number") value = value.padEnd(Math.min(10_000, schema.minLength), "x");
+    if (typeof schema.maxLength === "number") value = value.slice(0, schema.maxLength);
+    return value;
+}
+
 export function getTestSampleValue(param: GenerationTool["params"][number]): unknown {
-    const schemaType = getSchemaType(param.schema);
-
-    if (param.schema?.format === "binary" || schemaType === "file") return "ZmlsZSBjb250ZW50";
-    if (schemaType === "array") return ["alpha", "beta"];
-    if (schemaType === "object") return { status: "open", owner: "team" };
-    if (schemaType === "integer" || schemaType === "number") return 42;
-    if (schemaType === "boolean") return true;
-
-    return `${param.argName}-value`;
+    return sampleSchema(param.schema, `${param.argName}-value`);
 }
 
 export function getTestArgs(tool: GenerationTool): Record<string, unknown> {

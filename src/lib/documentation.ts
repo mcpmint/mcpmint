@@ -69,7 +69,7 @@ export const guides: Guide[] = [
       {
         title: "Understand live tests",
         paragraphs: [
-          "Mocks stay in your browser. Execute live sends a real request directly from your browser to the imported base origin. The upstream must allow browser CORS. State-changing requests require confirmation, so use a development API and inspect the outgoing request first.",
+          "Inspection and mocks stay in your browser. Run live requests locally using the CLI or generated server against a development API. The CLI requires explicit permission for mutations. Inspect the outgoing request and review authentication before testing.",
         ],
       },
     ],
@@ -93,7 +93,7 @@ export const guides: Guide[] = [
         paragraphs: [
           "Working sessions and named projects use IndexedDB on the current site origin. Existing localStorage projects migrate when loaded. This is local browser storage, not account synchronization or encrypted cloud backup. Browser settings, private browsing, device cleanup or a domain change can remove or separate it.",
           "Export a portable project file for a backup or to move work between browsers. Project files contain the API model and tool configuration, including examples and descriptions: treat them as sensitive if the original specification is sensitive. A visible storage error means you should keep the tab open and export before leaving.",
-          "Credentials entered in the live request sandbox remain in that component's memory and are redacted in its preview. They are not persisted as project settings. Credentials sent during live execution still reach the selected upstream API.",
+          "Configure credentials locally through the generated environment template or MCP client. The browser sandbox inspects requests and runs mocks without accepting or sending upstream credentials.",
         ],
       },
       {
@@ -123,7 +123,7 @@ export const guides: Guide[] = [
         title: "Compact mode and large catalogs",
         paragraphs: [
           "Compact mode exposes list, schema lookup and invocation meta-tools instead of sending every selected tool definition to the AI client at once. It reduces the tool context presented to a model; it does not bypass import or export workload limits.",
-          "Live sandbox requests time out after 10 seconds and stop reading after 256 KiB of response bytes. Browser CORS and the site's connection policy still apply. HTTPS upstreams and loopback development servers are supported for browser connections; insecure remote HTTP APIs should use HTTPS or be tested locally from the exported server.",
+          "Local CLI live tests time out after 10 seconds and stop reading after 256 KiB of response bytes. Browser inspection and mocks send no API requests. Use the generated server to verify edited tools and authentication.",
         ],
       },
       {
@@ -159,7 +159,7 @@ export const guides: Guide[] = [
       {
         title: "Verify before connecting an agent",
         paragraphs: [
-          "Inspect the outgoing request with the browser sandbox, run mocks and test real requests against a development API. Review schema conversion warnings, authentication selection and state-changing methods. Use the least privilege possible and monitor the deployed server.",
+          "Inspect the outgoing request with the browser sandbox, run mocks and test real requests locally against a development API. Review schema conversion warnings, authentication selection and state-changing methods. Use the least privilege possible and monitor the deployed server.",
           "If you deploy the mcpmint website itself, set NEXT_PUBLIC_SITE_URL to the actual HTTPS origin before building. The website uses server API routes and security headers, so it requires a Next.js server or compatible platform; it is not a pure static export. The repository deployment verification guide covers crawler access and search indexing checks.",
         ],
       },

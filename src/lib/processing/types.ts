@@ -17,6 +17,7 @@ export type ProcessingRequest =
   | { action: "parse"; file?: File; content?: string; filename: string }
   | { action: "project-import"; file?: File; content?: string }
   | { action: "project-validate"; project: PortableProjectFile }
+  | { action: "snapshot-validate"; snapshot: unknown }
   | { action: "project-export"; project: PortableProjectFile }
   | { action: "capabilities"; spec: ParsedSpec }
   | { action: "preview" | "generate" | "export-analysis"; payload: unknown };

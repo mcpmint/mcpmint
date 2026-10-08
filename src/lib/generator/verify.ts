@@ -173,6 +173,7 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 declare const Buffer: {
+  concat(values: readonly Uint8Array[]): { toString(encoding: string): string; };
   from(value: string, encoding?: string): {
     toString(encoding: string): string;
     length: number;
@@ -213,6 +214,8 @@ declare module "zod" {
 }
 
 declare module "dotenv/config" {}
+declare module "dotenv" { export function config(options?: { path: string }): void; }
+declare module "node:url" { export function fileURLToPath(url: URL): string; }
 
 declare module "http" {
   const http: {
@@ -370,6 +373,11 @@ function verifyNodeProjectFull(project: GeneratedProject): VerificationCheck[] {
             return checks;
         }
 
+        if (process.env.MCPMINT_AUDIT_GENERATED === "1") {
+            checks.push(runVerificationCommand("node-dependency-audit", "npm", ["audit", "--audit-level=low"], tempDir, "Generated Node dependencies have an untriaged advisory"));
+            if (checks.at(-1)?.status !== "passed") return checks;
+        }
+
         checks.push(runVerificationCommand(
             "node-build",
             "npm",
@@ -427,6 +435,9 @@ function createPythonImportStubs(tempDir: string) {
     def __init__(self, name):
         self.name = name
 
+    def add_tool(self, tool):
+        return tool
+
     def tool(self, *args, **kwargs):
         def decorator(function):
             return function
@@ -441,6 +452,14 @@ function createPythonImportStubs(tempDir: string) {
 
     writeFileSync(join(fastmcpDir, "exceptions.py"), `class ToolError(Exception):
     pass
+`, "utf8");
+
+    const toolsDir = join(fastmcpDir, "tools");
+    mkdirSync(toolsDir, { recursive: true });
+    writeFileSync(join(toolsDir, "__init__.py"), `class FunctionTool:
+    @classmethod
+    def from_function(cls, function, **kwargs):
+        return cls()
 `, "utf8");
 
     // `mcp.types.ToolAnnotations` is imported by the generated server module.

@@ -1,3 +1,4 @@
+import { mcpEndpointUrl } from "./installation.ts";
 import type { GenerationPlan } from "./types.ts";
 import { collectAuthSchemes } from "./strategies/auth.ts";
 import { joinProjectPath, renderMcpClientConfig } from "./client-config.ts";
@@ -22,14 +23,13 @@ function getTransportName(plan: GenerationPlan): string {
 
 function getTransportUrl(plan: GenerationPlan): string {
     if (plan.runtime.transport === "stdio") return "";
-    if (plan.runtime.transport === "sse") return `http://${plan.server.host}:${plan.server.port}/sse`;
-    return `http://${plan.server.host}:${plan.server.port}`;
+    return mcpEndpointUrl(plan.runtime.language, plan.runtime.transport, plan.server.host, plan.server.port);
 }
 
 function renderEnvVars(plan: GenerationPlan): string {
     const authSchemes = collectAuthSchemes(plan);
     const rows = [
-        `| \`API_BASE_URL\` | Base URL for upstream API requests. | \`${plan.spec.baseUrl || "https://api.example.com"}\` |`,
+        `| \`API_BASE_URL\` | Optional override for ALL upstream operation servers; leave empty to preserve imported server precedence. | \`${plan.spec.baseUrl || "https://api.example.com"}\` |`,
     ];
 
     for (const auth of authSchemes) {
@@ -135,10 +135,7 @@ function renderWarnings(plan: GenerationPlan): string {
 }
 
 function getClientConfigEnv(plan: GenerationPlan): Record<string, string> {
-    const env: Record<string, string> = {
-        API_BASE_URL: plan.spec.baseUrl || "https://api.example.com",
-    };
-
+    const env: Record<string, string> = {};
     for (const auth of collectAuthSchemes(plan)) {
         if (auth.apiKeyEnvVar) env[auth.apiKeyEnvVar] = "your_api_key_here";
         if (auth.bearerTokenEnvVar) env[auth.bearerTokenEnvVar] = "your_token_here";
@@ -169,6 +166,7 @@ function renderClientConfig(plan: GenerationPlan, runtime: ReadmeRuntimeDetails)
         serverName: plan.server.name,
         transport: plan.runtime.transport,
         transportUrl: getTransportUrl(plan),
+        ...(plan.mcpServerAuth.type === "bearer" ? { headers: { Authorization: "Bearer replace_with_MCP_AUTH_TOKEN" } } : {}),
     });
 }
 
@@ -177,46 +175,27 @@ function getClientConfigNote(plan: GenerationPlan): string {
         return `Client configuration formats vary by MCP client. Replace \`/absolute/path/to/${plan.server.name}\` with the absolute path where you extracted this project before using the config:`;
     }
 
-    return "Client configuration formats vary by MCP client. Use this as a starting point, and configure `.env` on the server process where this MCP server runs:";
+    return "Client configuration formats vary by MCP client. Use this URL/header shape with Cursor. For VS Code use its servers object; Claude Code uses claude mcp add --transport. Claude Desktop remote connectors require separate setup. Replace Authorization placeholders and configure `.env` on the server process:";
 }
 
 // Deploy section for the generated server, gated by language. Node ships one-click
 // deploy buttons; Python (FastMCP) ships FastMCP Cloud + Docker instructions. Owners
 // replace OWNER/REPO (and the Railway template id) with their own before publishing.
 function renderDeploySection(plan: GenerationPlan): string {
-    if (plan.runtime.language === "python") {
-        return `## Deploy
+    if (!plan.features.docker) return "## Hosting\n\nGenerate a separate HTTP project for hosting. Provider-specific adapters are not included. Validate deployment and access controls before exposing it.\n\n";
+    const command = plan.runtime.transport === "stdio"
+        ? `docker run -i --rm --env-file .env ${plan.server.name}`
+        : `docker run --rm -p 127.0.0.1:${plan.server.port}:${plan.server.port} --env-file .env ${plan.server.name}`;
+    return `## Deploy with Docker
 
-Replace \`OWNER/REPO\` with your published repository before deploying.
-
-### FastMCP Cloud
-
-The fastest path for FastMCP servers. Push this project to GitHub, then create a project at [fastmcp.cloud](https://fastmcp.cloud) pointed at your repository. FastMCP Cloud detects the \`mcp\` object in \`src/server.py\`, installs \`pyproject.toml\`, and hosts a remote Streamable HTTP endpoint. Set the environment variables from the table above in the project settings.
-
-### Docker
-
-The generated \`Dockerfile\` builds a self-contained image (stdio by default, Streamable HTTP via \`MCP_TRANSPORT=http\`).
+This image uses the transport selected at generation: **${plan.runtime.transport}**. Generate a new project to change transport. HTTP containers bind to all container interfaces; the command below publishes only on the host's loopback address. Set PORT and MCP_HOST explicitly when needed. Configure upstream credentials and MCP_AUTH_TOKEN in .env before starting a protected server.
 
 \`\`\`bash
 docker build -t ${plan.server.name} .
-# stdio (keep stdin open, no TTY):
-docker run -i --rm --env-file .env ${plan.server.name}
-# Streamable HTTP:
-docker run -p ${plan.server.port}:${plan.server.port} -e MCP_TRANSPORT=http --env-file .env ${plan.server.name}
+${command}
 \`\`\`
 
-> Cloudflare Workers one-click deploy is Node-only and is not offered for the Python target.
-
-`;
-    }
-
-    return `## Deploy
-
-Replace \`OWNER/REPO\` (and the Railway template id) with your published repository before using these buttons.
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/REPO)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/OWNER/REPO)
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/YOUR_TEMPLATE_ID?utm_medium=integration&utm_source=button&utm_campaign=generic)
+Cloud provider adapters and one-click deployments are not included or verified. Validate your provider's networking, HTTPS termination, secrets, and access policy before public exposure.
 
 `;
 }
@@ -260,7 +239,7 @@ Generated by mcpmint ${plan.generatorVersion}.
 ## Install
 
 \`\`\`bash
-${runtime.installCommand}
+${plan.runtime.language === "python" ? "python3 -m venv .venv\n.venv/bin/python -m pip install -e .\n# Windows: py -m venv .venv; then .venv\\Scripts\\python.exe -m pip install -e ." : `${runtime.installCommand}\n${plan.runtime.packageManager === "npm" ? "npm run" : plan.runtime.packageManager} build`}
 \`\`\`
 
 ## Configure

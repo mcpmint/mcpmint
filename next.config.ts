@@ -10,6 +10,9 @@ import type { NextConfig } from "next";
 //   remains until the app moves to nonce-based dynamic rendering or Webpack SRI.
 // - unsafe-eval is development-only; React/Next do not require it in production.
 const isDevelopment = process.env.NODE_ENV === "development";
+const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN
+    ? new URL(process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com") : undefined;
+if (posthogHost && (posthogHost.protocol !== "https:" || posthogHost.username || posthogHost.password || posthogHost.pathname !== "/" || posthogHost.search || posthogHost.hash)) throw new Error("NEXT_PUBLIC_POSTHOG_HOST must be an HTTPS origin without credentials, path or query.");
 const contentSecurityPolicy = [
     "default-src 'self'",
     "base-uri 'self'",
@@ -20,9 +23,7 @@ const contentSecurityPolicy = [
     "font-src 'self' https://cdn.fontshare.com https://api.fontshare.com data:",
     "style-src 'self' 'unsafe-inline' https://api.fontshare.com https://cdn.fontshare.com",
     `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""}`,
-    // Live tests are explicitly initiated and enforce the imported base origin in code.
-    // CORS still applies. Local connection checks target loopback development servers.
-    "connect-src 'self' https: http://localhost:* http://127.0.0.1:*",
+    `connect-src 'self' https://api.fontshare.com https://cdn.fontshare.com${posthogHost ? ` ${posthogHost.origin}` : ""}`,
     "worker-src 'self'",
     ...(isDevelopment ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");

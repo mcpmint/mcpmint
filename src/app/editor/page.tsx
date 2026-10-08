@@ -1,5 +1,8 @@
 "use client";
 
+import { toolCountBucket } from "@/lib/analytics/events";
+import { trackEvent } from "@/lib/analytics/client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -312,6 +315,7 @@ export default function EditorPage() {
                     Review drift
                   </summary>
                   <ul className="mt-2 max-h-40 min-w-[280px] space-y-1 overflow-auto border border-border bg-background p-3">
+                    {lastSpecDiff.configurationChanges?.map((message) => <li key={message} className="text-amber">{message}</li>)}
                     {lastSpecDiff.changes.map((change) => (
                       <li key={`${change.kind}-${change.key}`}>
                         <span className="uppercase text-muted-foreground">
@@ -363,6 +367,7 @@ export default function EditorPage() {
                 </button>
               ))}
               <input
+                aria-label="Choose an updated API specification"
                 ref={regenerateInput}
                 type="file"
                 accept=".json,.yaml,.yml,application/json,application/yaml"
@@ -588,24 +593,13 @@ export default function EditorPage() {
                   )}
                   {/* Row */}
                   <div
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={isExpanded}
-                    aria-controls={`endpoint-details-${domId}`}
-                    aria-label={`${isExpanded ? "Collapse" : "Expand"} ${ep.method} ${ep.path}`}
                     className={`
                       grid grid-cols-[44px_64px_minmax(0,1fr)_32px] md:grid-cols-[40px_70px_1fr_180px_80px_40px] gap-2 md:gap-4 py-3 items-center cursor-pointer transition-colors
                       ${tool.enabled ? "bg-primary/[0.03]" : "hover:bg-surface/50"}
                       ${isExpanded ? "bg-surface" : ""}
                     `}
                     onClick={() => setExpandedId(isExpanded ? null : ep.id)}
-                    onKeyDown={(event) => {
-                      if (event.currentTarget !== event.target) return;
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setExpandedId(isExpanded ? null : ep.id);
-                      }
-                    }}
+
                   >
                     {/* Checkbox */}
                     <div className="min-h-11 flex items-center justify-center">
@@ -695,11 +689,11 @@ export default function EditorPage() {
                     </span>
 
                     {/* Expand arrow */}
-                    <div className="flex justify-center">
+                    <button type="button" aria-expanded={isExpanded} aria-controls={`endpoint-details-${domId}`} aria-label={`${isExpanded ? "Collapse" : "Expand"} ${ep.method} ${ep.path}`} onClick={(event) => { event.stopPropagation(); setExpandedId(isExpanded ? null : ep.id); }} className="flex h-11 items-center justify-center focus-visible:outline-2 focus-visible:outline-primary">
                       <ChevronDown
                         className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
                       />
-                    </div>
+                    </button>
                   </div>
 
                   {/* Inline expansion */}
@@ -732,12 +726,14 @@ export default function EditorPage() {
                         {/* Enable */}
                         <div className="space-y-1.5">
                           <Label
-                            htmlFor={`tool-description-${domId}`}
+                            htmlFor={`tool-status-${domId}`}
                             className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase"
                           >
                             Status
                           </Label>
                           <Button
+                            id={`tool-status-${domId}`}
+                            aria-pressed={tool.enabled}
                             variant={tool.enabled ? "default" : "outline"}
                             size="sm"
                             className={`w-full text-xs ${tool.enabled ? "bg-primary text-primary-foreground" : "border-border"}`}
@@ -753,7 +749,7 @@ export default function EditorPage() {
 
                         {/* Description */}
                         <div className="space-y-1.5 md:col-span-2">
-                          <Label className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
+                          <Label htmlFor={`tool-description-${domId}`} className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">
                             Description
                           </Label>
                           <Textarea
@@ -993,6 +989,7 @@ export default function EditorPage() {
 
               <Button
                 onClick={() => {
+                  trackEvent("selection_completed", { tool_count: toolCountBucket(selectedCount) });
                   setCurrentStep("export");
                   router.push("/export");
                 }}
