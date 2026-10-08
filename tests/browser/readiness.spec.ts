@@ -84,6 +84,7 @@ test("pasted specs have separate project identities and a failed external refere
   await paste(page, spec("Second API"));
   await expect(page).toHaveURL(/\/editor$/);
   await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => session(page).then(value => value.state.savedProjects.map(project => project.name).sort())).toEqual(["First API", "Second API"]);
   const saved = await session(page).then(value => value.state.savedProjects);
   expect(saved.map((p: { name: string }) => p.name).sort()).toEqual(["First API", "Second API"]);
   expect(new Set(saved.map((p: { id: string }) => p.id)).size).toBe(2);
@@ -138,6 +139,7 @@ test("invalid portable files and persisted sessions recover without replacing pr
   await paste(page, spec());
   await expect(page).toHaveURL(/\/editor$/);
   await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => session(page).then(value => value.state.savedProjects.length)).toBe(1);
   await page.goto("/import");
   await page.getByLabel("Import a saved mcpmint project file").setInputFiles({ name: "invalid.mcpmint.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ kind: "mcpmint-project", schemaVersion: 1, project: { id: "bad", name: "Bad", source: "paste", format: "openapi", endpointCount: 0, savedAt: 1 }, exportedAt: new Date().toISOString(), data: { spec: { apiModel: {} }, tools: [], authConfig: {}, serverConfig: {}, exportConfig: {} } })) });
   await expect(page.locator('main [role="alert"]')).toBeVisible();
