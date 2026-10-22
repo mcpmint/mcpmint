@@ -47,7 +47,7 @@ GENERATE OPTIONS
   --no-tests                    Skip generated smoke tests
   --no-docs                     Skip README/docs
   --docker                      Include Dockerfile + compose
-  --force                       Overwrite a non-empty output directory
+  --force                       Write into a non-empty output directory (keeps your files)
   --accept-risk                 Allow generation when Trust Scan verdict is red
   --attestation <file>          Write the Trust Scan attestation JSON
   --mcp-auth <none|bearer>      Protect HTTP/SSE MCP access (default: none)

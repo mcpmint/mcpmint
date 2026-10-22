@@ -44,7 +44,7 @@ mcpmint generate ./petstore.json --tag pets --method GET --dry-run
 mcpmint generate ./petstore.json --format tar --out ./petstore-mcp.tar.gz
 mcpmint generate ./petstore.json --stdout > petstore-mcp.tar.gz
 
-# Regenerate atomically whenever the source spec changes
+# Regenerate whenever the source spec changes (one run at a time)
 mcpmint generate ./petstore.json --out ./petstore-mcp --watch
 ```
 
@@ -64,14 +64,16 @@ mcpmint generate ./petstore.json --out ./petstore-mcp --watch
 | `--host` / `--port` | host / 1–65535 | `localhost` / `8080` |
 | `--verify` | `off`, `fast`, `full` | `fast` |
 | `--no-tests`, `--no-docs`, `--docker` | flags | — |
-| `--force` | overwrite non-empty output dir | off |
+| `--force` | write into a non-empty output dir: replace generated files, keep your other files | off |
 | `--accept-risk` | acknowledge and proceed after a red Trust Scan | off |
 | `--attestation` | Trust Scan attestation output file | — |
 | `--mcp-auth`, `--origin` | MCP bearer access and browser allow-list | none / localhost-only |
 | `--config` | JSON defaults file | — |
 | `--dry-run` | print the resolved plan; write nothing | off |
 | `--format`, `--stdout` | `dir`, reproducible `tar`, or tar.gz bytes | `dir` |
-| `--watch` | atomically regenerate on spec changes | off |
+| `--watch` | regenerate on spec changes; implies `--force` | off |
+
+The CLI records the files it generates in `.mcpmint-files`, and a later run removes only listed files that it no longer generates. It refuses an output folder that contains the current directory, and it writes nothing when verification fails.
 
 `--verify full` runs a real install + build + import + test of the generated project on your machine — the one check the [browser app](https://github.com/mcpmint/mcpmint) can't do.
 
