@@ -17,28 +17,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function collectPropertyDescriptions(schema: unknown): TextLocation[] {
+const SCHEMA_BRANCHES = ["anyOf", "oneOf", "allOf"] as const;
+const MAX_SCHEMA_DEPTH = 32;
+
+// Collect description and title text from every schema the tool emits,
+// including union branches, array items and additionalProperties.
+function collectSchemaText(schema: unknown): TextLocation[] {
     const locations: TextLocation[] = [];
 
-    function visit(value: unknown, path: string[]): void {
-        if (!isRecord(value)) return;
+    function visit(value: unknown, path: string[], depth: number): void {
+        if (!isRecord(value) || depth > MAX_SCHEMA_DEPTH) return;
+        if (path.length > 0) {
+            const label = `inputSchema property "${path.join(".")}"`;
+            if (typeof value.description === "string") locations.push({ text: value.description, label });
+            if (typeof value.title === "string") locations.push({ text: value.title, label });
+        }
         if (isRecord(value.properties)) {
             for (const [name, propertySchema] of Object.entries(value.properties)) {
-                if (!isRecord(propertySchema)) continue;
-                const propertyPath = [...path, name];
-                if (typeof propertySchema.description === "string") {
-                    locations.push({
-                        text: propertySchema.description,
-                        label: `inputSchema property "${propertyPath.join(".")}"`,
-                    });
-                }
-                visit(propertySchema, propertyPath);
-                if (isRecord(propertySchema.items)) visit(propertySchema.items, propertyPath);
+                visit(propertySchema, [...path, name], depth + 1);
             }
+        }
+        if (isRecord(value.items)) visit(value.items, path, depth + 1);
+        if (isRecord(value.additionalProperties)) visit(value.additionalProperties, path, depth + 1);
+        for (const branch of SCHEMA_BRANCHES) {
+            const options = value[branch];
+            if (Array.isArray(options)) for (const option of options) visit(option, path, depth + 1);
         }
     }
 
-    visit(schema, []);
+    visit(schema, [], 0);
     return locations;
 }
 
@@ -123,7 +130,8 @@ export function checkHiddenInstructions(tools: ScanTool[]): Finding[] {
     for (const tool of tools) {
         const locations: TextLocation[] = [];
         if (tool.description) locations.push({ text: tool.description, label: "description" });
-        locations.push(...collectPropertyDescriptions(tool.inputSchema));
+        if (tool.title) locations.push({ text: tool.title, label: "title" });
+        locations.push(...collectSchemaText(tool.inputSchema));
         for (const location of locations) findings.push(...scanText(tool, location));
     }
     return findings;

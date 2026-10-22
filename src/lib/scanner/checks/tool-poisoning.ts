@@ -37,15 +37,15 @@ const SIGNALS: PoisonSignal[] = [
 export function checkToolPoisoning(tools: ScanTool[]): Finding[] {
     const findings: Finding[] = [];
     for (const tool of tools) {
-        const description = tool.description || "";
-        for (const signal of SIGNALS) {
-            const match = description.match(signal.pattern);
+        const texts = [["description", tool.description], ["title", tool.title]] as const;
+        for (const [field, text] of texts) for (const signal of SIGNALS) {
+            const match = text?.match(signal.pattern);
             if (!match) continue;
             findings.push({
                 check: "TOOL_POISONING",
                 severity: "red",
                 toolName: tool.name,
-                message: `${signal.evidence} in description of "${tool.name}"`,
+                message: `${signal.evidence} in ${field} of "${tool.name}"`,
                 explanation: signal.explanation,
                 remediation: "Delete the instruction-like language and describe only the tool's inputs, side effects, and returned data. Treat remote content as data, never as instructions.",
                 evidence: match[0].slice(0, 160),
