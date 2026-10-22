@@ -22,6 +22,7 @@ interface RateWindow {
 
 const memoryBuckets = new Map<string, RateWindow>();
 
+
 /** Minimal header/IP surface used by getClientIp (NextRequest-compatible). */
 export interface ClientIpSource {
     headers: { get(name: string): string | null };
@@ -79,7 +80,7 @@ export function getClientIp(request: ClientIpSource): string {
     return "unknown";
 }
 
-function memoryRateLimited(key: string): { limited: boolean; retryAfterSec: number } {
+function memoryRateLimited(key: string, maxRequests: number): { limited: boolean; retryAfterSec: number } {
     const now = Date.now();
     const existing = memoryBuckets.get(key);
 
@@ -101,7 +102,7 @@ function memoryRateLimited(key: string): { limited: boolean; retryAfterSec: numb
     existing.count += 1;
     const retryAfterSec = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
     return {
-        limited: existing.count > RATE_LIMIT_MAX_REQUESTS,
+        limited: existing.count > maxRequests,
         retryAfterSec,
     };
 }
@@ -112,7 +113,8 @@ function memoryRateLimited(key: string): { limited: boolean; retryAfterSec: numb
  *   UPSTASH_REDIS_REST_TOKEN
  */
 async function upstashRateLimited(
-    key: string
+    key: string,
+    maxRequests: number
 ): Promise<{ limited: boolean; retryAfterSec: number } | null> {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -142,10 +144,15 @@ async function upstashRateLimited(
             return null;
         }
 
-        const results = (await response.json()) as Array<{ result?: number | string }>;
-        const count = Number(results?.[0]?.result ?? 0);
+        // A failed command still returns HTTP 200, with { error } instead of
+        // { result }. Treat it as "Redis unavailable" so the memory limit applies.
+        const results = (await response.json()) as Array<{ result?: unknown; error?: string }>;
+        const count = results?.[0]?.result;
+        if (typeof count !== "number") {
+            return null;
+        }
         return {
-            limited: count > RATE_LIMIT_MAX_REQUESTS,
+            limited: count > maxRequests,
             retryAfterSec: windowSec,
         };
     } catch {
@@ -165,9 +172,10 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
     const ip = getClientIp(request);
     const key = `${route}:${ip}`;
+    const maxRequests = RATE_LIMIT_MAX_REQUESTS;
 
-    const remote = await upstashRateLimited(key);
-    const result = remote ?? memoryRateLimited(key);
+    const remote = await upstashRateLimited(key, maxRequests);
+    const result = remote ?? memoryRateLimited(key, maxRequests);
 
     return {
         limited: result.limited,
