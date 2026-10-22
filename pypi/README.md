@@ -9,15 +9,16 @@ mcpmint generate ./petstore.json --lang python
 
 ## Note: this is a bridge to the Node CLI
 
-mcpmint's generator is written in TypeScript and published on npm. This PyPI
-package is a thin wrapper so Python users get the same `mcpmint` command — it
-runs the npm CLI via `npx` under the hood, pinned to the matching version.
+mcpmint's generator is written in TypeScript and published as `@mcpmint/cli`
+on npm. This PyPI package is a thin wrapper so Python users get the same
+`mcpmint` command — it runs the npm CLI via `npx` under the hood, pinned to the
+matching version.
 
 **It requires [Node.js](https://nodejs.org/) 18.17+** to be installed. If you'd
 rather skip the Python layer, install the CLI directly:
 
 ```bash
-npm install -g mcpmint
+npm install -g @mcpmint/cli
 ```
 
 Everything else — commands, flags, behavior — is identical to the

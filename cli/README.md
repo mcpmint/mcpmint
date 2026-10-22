@@ -3,7 +3,7 @@
 Generate [MCP](https://modelcontextprotocol.io) servers from OpenAPI and Postman specs — locally, from your terminal. **Your spec never leaves your machine.**
 
 ```bash
-npx mcpmint generate ./petstore.json
+npx @mcpmint/cli generate ./petstore.json
 ```
 
 ## What it does

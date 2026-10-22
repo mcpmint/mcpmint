@@ -43,7 +43,7 @@ body:
     id: surface
     attributes:
       label: How did you generate it?
-      options: ["Web app (browser)", "CLI (npx mcpmint / pip mcpmint)"]
+      options: ["Web app (browser)", "CLI (npx @mcpmint/cli / pip mcpmint)"]
     validations:
       required: true
   - type: textarea

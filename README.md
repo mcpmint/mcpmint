@@ -59,7 +59,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 1. **Import** — Upload an OpenAPI/Swagger or Postman spec (JSON/YAML), paste it, or enter a URL (fetched server-side to bypass CORS). Try the built-in sample if you just want a look.
 2. **Select** — Choose which endpoints to convert into MCP tools. Watch the context-budget meter, or flip on **compact mode** so a large API collapses into 3 meta-tools.
 3. **Configure** — Edit tool names, descriptions, and parameters for better LLM understanding; review any validation warnings.
-4. **Export** — Generate a complete MCP server in Node.js or Python. Generation stays in your browser by default. Then provide the extracted project&rsquo;s absolute path and copy the client config for Claude Desktop, Cursor, or the `claude mcp add` CLI. Run `mcpmint generate ./api.yaml --verify full` locally when you need install/build/runtime verification.
+4. **Export** — Generate a complete MCP server in Node.js or Python. Generation stays in your browser by default. Then provide the extracted project&rsquo;s absolute path and copy the client config for Claude Desktop, Cursor, or the `claude mcp add` CLI. Run `npx @mcpmint/cli generate ./api.yaml --verify full` locally when you need install/build/runtime verification.
 
 The CLI mirrors the safety workflow with `capabilities`, `scan`, and no-network-by-default `test` commands, plus endpoint/tag/method filters, JSON config files, dry-run plans, Trust Scan gating, attestations, tar/stdout output, atomic watch regeneration, and the same supply-chain output.
 
@@ -98,7 +98,7 @@ mcpmint/
 │   │   ├── generator/               # Planner, targets, verify
 │   │   └── parsers/                 # OpenAPI + Postman
 │   └── store/                       # Zustand session store
-├── cli/                             # npm package (mcpmint CLI)
+├── cli/                             # npm package (@mcpmint/cli)
 ├── pypi/                            # PyPI wrapper
 └── package.json
 ```

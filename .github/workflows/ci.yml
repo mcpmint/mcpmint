@@ -111,6 +111,23 @@ jobs:
         run: npm audit --audit-level=low
         working-directory: cli
 
+  pypi-bridge:
+    name: PyPI bridge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Test scoped npm forwarding
+        run: python -m unittest discover -s tests
+        working-directory: pypi
+
   generated-projects:
     name: Generated project full verification
     runs-on: ubuntu-latest
