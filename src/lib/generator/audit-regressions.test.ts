@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { parseOpenAPIFromContent } from "../parsers/openapi.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "../../../cli/src/build-request.ts";
@@ -48,5 +53,62 @@ test("nested minItems arrays do not expand generated test samples without bound"
         const { project } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language, framework: language === "node" ? "mcp-ts-sdk" : "fastmcp" } });
         const bytes = [...project.files.values()].reduce((total, content) => total + content.length, 0);
         assert.ok(bytes < 2_000_000, `${language} output is ${bytes} bytes`);
+    }
+});
+
+const dotSegmentSpec = {
+    openapi: "3.0.3",
+    info: { title: "Sessions", version: "1" },
+    servers: [{ url: "https://api.example.com" }],
+    paths: {
+        "/users/{id}/sessions": {
+            delete: {
+                operationId: "deleteUserSessions",
+                parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+                responses: { "204": { description: "ok" } },
+            },
+        },
+    },
+};
+
+test("generated Node servers reject dot-segment path values", async () => {
+    const request = await requestFor(dotSegmentSpec);
+    const { project } = prepareGeneratedProject(request);
+    const directory = mkdtempSync(join(tmpdir(), "mcpmint-dots-"));
+    try {
+        const file = join(directory, "serialization.ts");
+        writeFileSync(file, project.files.get("src/api/serialization.ts")!);
+        const { serializePathParameter } = await import(pathToFileURL(file).href);
+        for (const value of [".", ".."]) {
+            assert.throws(() => serializePathParameter("id", value, { location: "path" }), /cannot be/, value);
+        }
+        // Encoded dots are encoded again, so they cannot form a dot segment.
+        assert.equal(serializePathParameter("id", "%2e%2e", { location: "path" }), "%252e%252e");
+        assert.equal(serializePathParameter("id", "a.b", { location: "path" }), "a.b");
+    } finally {
+        rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test("generated Python servers reject dot-segment path values", async () => {
+    const request = await requestFor(dotSegmentSpec, { language: "python" });
+    const { project } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    const directory = mkdtempSync(join(tmpdir(), "mcpmint-dots-py-"));
+    try {
+        writeFileSync(join(directory, "serialization.py"), project.files.get("src/serialization.py")!);
+        const output = execFileSync("python3", ["-c", `
+import serialization
+for value in [".", ".."]:
+    try:
+        serialization.serialize_path_parameter("id", value, {"location": "path"})
+        print("accepted", value)
+    except ValueError:
+        pass
+print(serialization.serialize_path_parameter("id", "%2e%2e", {"location": "path"}))
+print(serialization.serialize_path_parameter("id", "a.b", {"location": "path"}))
+`], { cwd: directory, encoding: "utf8" });
+        assert.equal(output.trim(), "%252e%252e\na.b");
+    } finally {
+        rmSync(directory, { recursive: true, force: true });
     }
 });

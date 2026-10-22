@@ -217,6 +217,16 @@ export function expectedPathParameter(
     value: unknown,
     options: { style?: string; explode?: boolean }
 ): string {
+    const serialized = expectedPathParameterValue(name, value, options);
+    if (serialized === "." || serialized === "..") throw new Error(`Path parameter "${name}" cannot be "." or "..".`);
+    return serialized;
+}
+
+function expectedPathParameterValue(
+    name: string,
+    value: unknown,
+    options: { style?: string; explode?: boolean }
+): string {
     const style = options.style || "simple";
     const explode = expectedExplode(style, options.explode);
     const encode = (entry: unknown) => encodeURIComponent(scalarToExpectedString(entry));

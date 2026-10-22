@@ -657,7 +657,17 @@ export function serializeParameterValue(name: string, value: unknown, options: S
   return scalarToString(value);
 }
 
+// encodeURIComponent keeps "." and "..", and URL parsing then drops or climbs
+// that segment, so fetch would call a different endpoint. Reject them.
 export function serializePathParameter(name: string, value: unknown, options: SerializedParameterOptions): string {
+  const serialized = serializePathParameterValue(name, value, options);
+  if (serialized === "." || serialized === "..") {
+    throw new Error(\`Path parameter "\${name}" cannot be "." or "..".\`);
+  }
+  return serialized;
+}
+
+function serializePathParameterValue(name: string, value: unknown, options: SerializedParameterOptions): string {
   const style = options.style || "simple";
   const explode = shouldExplode(style, options.explode);
   const encode = (entry: unknown) => encodeURIComponent(scalarToString(entry));
@@ -1433,6 +1443,8 @@ test("serialization helpers encode paths and queries", () => {
     serializePathParameter("ids", ["a", "b"], { location: "path", style: "matrix", explode: true }),
     ";ids=a;ids=b"
   );
+  assert.throws(() => serializePathParameter("id", "..", { location: "path" }), /cannot be/);
+  assert.throws(() => serializePathParameter("id", ".", { location: "path" }), /cannot be/);
 
   const params = new URLSearchParams();
   appendSerializedParameter(params, "filter", { status: "open" }, { location: "query", style: "deepObject", explode: true });

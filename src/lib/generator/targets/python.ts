@@ -1067,6 +1067,15 @@ def serialize_parameter_value(name: str, value: object, options: dict) -> str:
 
 
 def serialize_path_parameter(name: str, value: object, options: dict) -> str:
+    # quote() keeps "." and "..", and URL parsing then drops or climbs that
+    # segment, so the HTTP client would call a different endpoint. Reject them.
+    serialized = _serialize_path_parameter_value(name, value, options)
+    if serialized in {".", ".."}:
+        raise ValueError(f'Path parameter "{name}" cannot be "." or "..".')
+    return serialized
+
+
+def _serialize_path_parameter_value(name: str, value: object, options: dict) -> str:
     style = options.get("style") or "simple"
     explode = should_explode(style, options.get("explode"))
     encoded_name = quote(name, safe="")
@@ -1465,6 +1474,9 @@ def test_serialization_helpers_encode_paths_and_queries(monkeypatch) -> None:
         ["a", "b"],
         {"location": "path", "style": "matrix", "explode": True},
     ) == ";ids=a;ids=b"
+    for dot_value in [".", ".."]:
+        with pytest.raises(ValueError, match="cannot be"):
+            serialization.serialize_path_parameter("id", dot_value, {"location": "path"})
 
     params: list[tuple[str, str]] = []
     serialization.append_serialized_parameter(
