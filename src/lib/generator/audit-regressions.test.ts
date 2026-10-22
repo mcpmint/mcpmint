@@ -178,3 +178,29 @@ test("Postman requests with different API keys keep separate auth schemes", () =
         [{ apiKey: [] }],
     ]);
 });
+
+const relativeServerSpec = {
+    openapi: "3.0.3",
+    info: { title: "Pets", version: "1" },
+    servers: [{ url: "/api/v3" }],
+    paths: { "/pet": { get: { operationId: "getPet", responses: { "200": { description: "ok" } } } } },
+};
+
+test("relative servers resolve against the URL the spec was imported from", async () => {
+    const parsed = await parseOpenAPIFromContent(JSON.stringify(relativeServerSpec), "openapi.json", "https://petstore3.swagger.io/api/v3/openapi.json");
+    assert.equal(parsed.baseUrl, "https://petstore3.swagger.io/api/v3");
+
+    const swagger = await parseOpenAPIFromContent(JSON.stringify({
+        swagger: "2.0", info: { title: "Old", version: "1" }, basePath: "/v1",
+        paths: { "/items": { get: { operationId: "list", responses: { "200": { description: "ok" } } } } },
+    }), "swagger.json", "https://legacy.example.com/docs/swagger.json");
+    assert.equal(swagger.baseUrl, "https://legacy.example.com/v1");
+});
+
+test("relative servers in file imports use the base URL the user enters", async () => {
+    const request = await requestFor(relativeServerSpec);
+    assert.throws(() => prepareGeneratedProject(request), /Enter a full API base URL/);
+
+    const { plan } = prepareGeneratedProject({ ...request, spec: { ...request.spec, baseUrl: "https://petstore3.swagger.io" } });
+    assert.equal(plan.tools[0].baseUrl, "https://petstore3.swagger.io/api/v3");
+});

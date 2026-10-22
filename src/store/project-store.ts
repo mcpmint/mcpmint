@@ -162,6 +162,7 @@ export interface ProjectState {
     setAuthConfig: (config: AuthConfig) => void;
     setMcpServerAuthConfig: (config: Partial<McpServerAuthConfig>) => void;
     setServerConfig: (config: Partial<ServerConfig>) => void;
+    setSpecBaseUrl: (baseUrl: string) => void;
     setExportConfig: (config: ExportConfigUpdate) => void;
 
     // Project history actions
@@ -430,6 +431,8 @@ export const useProjectStore = create<ProjectState>()(
                     ...config,
                 }),
             })),
+
+            setSpecBaseUrl: (baseUrl) => set((state) => state.spec ? { spec: { ...state.spec, baseUrl } } : {}),
 
             setServerConfig: (config) => set((state) => ({
                 serverConfig: { ...state.serverConfig, ...config },

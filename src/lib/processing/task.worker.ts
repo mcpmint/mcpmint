@@ -29,7 +29,7 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
         buildValidationSummary,
         buildEndpointWarnings,
       } = await import("../parsers/openapi");
-      const spec = await parseOpenAPIFromContent(text, data.filename);
+      const spec = await parseOpenAPIFromContent(text, data.filename, data.sourceUrl);
       // Raw imports are unnecessary after normalization and amplify storage substantially.
       for (const operation of spec.apiModel!.operations) {
         if (operation.source) delete operation.source.raw;

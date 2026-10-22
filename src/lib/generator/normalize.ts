@@ -295,6 +295,22 @@ function normalizeTool(
     );
 }
 
+// A relative operation server ("/api/v3") is resolved against the base URL that
+// the user entered for the spec.
+function resolveToolBaseUrl(toolBaseUrl: string | undefined, specBaseUrl: string): string {
+    if (!toolBaseUrl) return specBaseUrl;
+    try {
+        new URL(toolBaseUrl);
+        return toolBaseUrl;
+    } catch {
+        try {
+            return new URL(toolBaseUrl, specBaseUrl).toString().replace(/\/$/, "");
+        } catch {
+            return toolBaseUrl;
+        }
+    }
+}
+
 export function buildGenerationPlan(request: GeneratorRequest): GenerationPlan {
     const warnings: string[] = [];
     const seenToolNames = new Set<string>();
@@ -327,7 +343,7 @@ export function buildGenerationPlan(request: GeneratorRequest): GenerationPlan {
 
         return {
             ...normalized,
-            baseUrl: normalized.baseUrl || request.spec.baseUrl,
+            baseUrl: resolveToolBaseUrl(normalized.baseUrl, request.spec.baseUrl),
             displayName: uniqueDisplayName,
             functionName: uniqueFunctionName,
         };

@@ -6,26 +6,27 @@ import type { OpenAPISpec } from "../api-model/openapi.ts";
 import { apiModelToParsedSpec } from "../api-model/legacy.ts";
 
 // Parse OpenAPI/Swagger spec
-export async function parseOpenAPISpec(input: string | object): Promise<ParsedSpec> {
+export async function parseOpenAPISpec(input: object, sourceUrl?: string): Promise<ParsedSpec> {
     try {
-        const api = resolveLocalReferences(typeof input === "string" ? JSON.parse(input) : input) as OpenAPISpec;
+        const api = resolveLocalReferences(input) as OpenAPISpec;
         if (!(typeof api.openapi === "string" && /^3\.\d+\.\d+$/.test(api.openapi)) && api.swagger !== "2.0") {
             throw new Error("Choose an OpenAPI 3.x or Swagger 2.0 specification.");
         }
         if (typeof api.info?.title !== "string" || typeof api.info?.version !== "string") {
             throw new Error("The specification needs info.title and info.version strings.");
         }
-        return apiModelToParsedSpec(buildOpenAPIModel(api, {
-            importedFrom: typeof input === "string" ? input : undefined,
-        }));
+        // The generate request accepts URLs up to 4,000 characters.
+        const importedFrom = sourceUrl && sourceUrl.length <= 4000 ? sourceUrl : undefined;
+        return apiModelToParsedSpec(buildOpenAPIModel(api, { importedFrom }));
     } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to parse OpenAPI spec";
         throw new Error(`OpenAPI parsing error: ${message}`);
     }
 }
 
-// Parse from file content - supports both OpenAPI and Postman
-export async function parseOpenAPIFromContent(content: string, filename: string): Promise<ParsedSpec & { format?: string }> {
+// Parse from file content - supports both OpenAPI and Postman. sourceUrl is the
+// URL the content came from, used to resolve relative server URLs.
+export async function parseOpenAPIFromContent(content: string, filename: string, sourceUrl?: string): Promise<ParsedSpec & { format?: string }> {
     assertTextSize(content);
     try {
         // Try to parse as JSON first
@@ -50,7 +51,7 @@ export async function parseOpenAPIFromContent(content: string, filename: string)
         }
 
         // Default to OpenAPI
-        const spec = await parseOpenAPISpec(parsed);
+        const spec = await parseOpenAPISpec(parsed, sourceUrl);
         if (spec.apiModel!.operations.length > MAX_OPERATIONS) throw new Error(`Specifications are limited to ${MAX_OPERATIONS.toLocaleString()} operations.`);
         return { ...spec, format: "openapi" };
     } catch (error) {

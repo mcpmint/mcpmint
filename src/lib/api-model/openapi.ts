@@ -63,7 +63,18 @@ function resolveServerUrl(server: ApiServer): string {
     );
 }
 
-function normalizeServers(api: OpenAPISpec): ApiServer[] {
+// OpenAPI allows relative server URLs ("/api/v3"). They are relative to the
+// document URL, so resolve them when the spec was imported from a URL.
+function resolveAgainstDocument(url: string, documentUrl?: string): string {
+    if (!documentUrl || /^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+    try {
+        return new URL(url, documentUrl).toString().replace(/\/$/, "");
+    } catch {
+        return url;
+    }
+}
+
+function normalizeServers(api: OpenAPISpec, documentUrl?: string): ApiServer[] {
     if (Array.isArray(api.servers) && api.servers.length > 0) {
         return api.servers.flatMap((server) => {
             const record = asRecord(server);
@@ -93,7 +104,7 @@ function normalizeServers(api: OpenAPISpec): ApiServer[] {
 
             return [{
                 ...normalizedServer,
-                resolvedUrl: resolveServerUrl(normalizedServer),
+                resolvedUrl: resolveAgainstDocument(resolveServerUrl(normalizedServer), documentUrl),
             }];
         });
     }
@@ -105,6 +116,12 @@ function normalizeServers(api: OpenAPISpec): ApiServer[] {
             url,
             resolvedUrl: url,
         }];
+    }
+
+    // Swagger 2.0 without "host" means the host that serves the document.
+    if (api.swagger === "2.0" && documentUrl) {
+        const url = api.basePath || "/";
+        return [{ url, resolvedUrl: resolveAgainstDocument(url, documentUrl) }];
     }
 
     return [];
@@ -354,13 +371,14 @@ function normalizeSecuritySchemes(api: OpenAPISpec): Record<string, Record<strin
 }
 
 export function buildOpenAPIModel(api: OpenAPISpec, source: Partial<ApiSourceMetadata> = {}): ApiModel {
-    const servers = normalizeServers(api);
+    const documentUrl = source.importedFrom;
+    const servers = normalizeServers(api, documentUrl);
     const globalSecurity = normalizeSecurityRequirements(api.security);
     const operations: ApiOperation[] = [];
 
     for (const [path, pathItemValue] of Object.entries(api.paths || {})) {
         const pathItem = asRecord(pathItemValue) || {};
-        const pathServers = normalizeServers(pathItem as OpenAPISpec);
+        const pathServers = normalizeServers(pathItem as OpenAPISpec, documentUrl);
         const pathParameters = Array.isArray(pathItem.parameters)
             ? pathItem.parameters
                 .map((parameter) => normalizeParameter(parameter, "path"))
@@ -394,7 +412,7 @@ export function buildOpenAPIModel(api: OpenAPISpec, source: Partial<ApiSourceMet
                 security: operation.security === undefined
                     ? undefined
                     : normalizeSecurityRequirements(operation.security),
-                servers: normalizeServers(operation as OpenAPISpec),
+                servers: normalizeServers(operation as OpenAPISpec, documentUrl),
                 pathServers,
             });
         }
