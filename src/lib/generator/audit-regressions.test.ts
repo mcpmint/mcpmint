@@ -303,3 +303,17 @@ print(json.dumps(response_to_tool_result(FakeResponse("text/plain", "hi"))))
 `], { encoding: "utf8" });
     assert.equal(output.trim(), '{"data": {"id": "1"}}\n{"text": "hi"}');
 });
+
+test("generated packages expose the command that server.json launches", async () => {
+    const request = await requestFor(dotSegmentSpec);
+    const { project: node } = prepareGeneratedProject(request);
+    const pkg = JSON.parse(node.files.get("package.json")!);
+    assert.equal(pkg.bin[request.serverConfig.name], "dist/src/index.js");
+    assert.deepEqual(pkg.files, ["dist"]);
+    assert.equal(pkg.scripts.prepack, "npm run build");
+    assert.ok(node.files.get("src/index.ts")!.startsWith("#!/usr/bin/env node\n"));
+
+    const { project: python } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    assert.match(python.files.get("pyproject.toml")!, new RegExp(`\\[project\\.scripts\\]\\n"${request.serverConfig.name}" = "server:main"`));
+    assert.match(python.files.get("src/server.py")!, /def main\(\) -> None:\n {4}mcp\.run\(transport="stdio"\)\n\n\nif __name__ == "__main__":\n {4}main\(\)/);
+});

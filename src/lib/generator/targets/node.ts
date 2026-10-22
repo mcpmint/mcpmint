@@ -316,7 +316,8 @@ function renderIndex(plan: GenerationPlan): string {
     // literals to patch. Only the transport-agnostic scaffolding lives here.
     const bootstrap = transportStrategy.bootstrap;
 
-    return `import "dotenv/config";
+    return `#!/usr/bin/env node
+import "dotenv/config";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 ${transportStrategy.imports}
 import { ${plan.runtime.transport === "stdio" ? "MCP_SERVER_CONFIG" : "MCP_SERVER_CONFIG, assertMcpServerAccessConfig"} } from "./config.js";
@@ -1487,8 +1488,12 @@ export function generateNodeProject(plan: GenerationPlan): GeneratedProject {
         // Cross-check field for the MCP registry: must equal the server.json `name`,
         // proving the published package and the registry entry share an owner.
         mcpName: `io.github.OWNER/${sanitizeServerId(plan.server.name)}`,
+        // server.json launches the package with npx, which runs this bin.
+        bin: { [plan.server.name]: "dist/src/index.js" },
+        files: ["dist"],
         scripts: {
             build: "tsc",
+            prepack: "npm run build",
             start: "node dist/src/index.js",
             dev: "tsx src/index.ts",
             test: "tsx --test tests/**/*.test.ts",

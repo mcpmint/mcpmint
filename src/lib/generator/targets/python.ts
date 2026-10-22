@@ -693,8 +693,12 @@ def invoke_api_endpoint(endpointId: str, parameters: dict | None = None) -> dict
         }
 
 
-if __name__ == "__main__":
+def main() -> None:
 ${runLine}
+
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
@@ -734,8 +738,12 @@ mcp = FastMCP(MCP_SERVER_CONFIG["name"])
 
 
 ${plan.tools.map(renderPythonServerTool).join("\n")}
-if __name__ == "__main__":
+def main() -> None:
 ${runLine}
+
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
@@ -1540,6 +1548,10 @@ dependencies = [
     "uvicorn==0.35.0",
     "starlette==1.0.1",` : ""}
 ]
+
+# server.json launches the package with uvx, which runs this script.
+[project.scripts]
+${JSON.stringify(plan.server.name)} = "server:main"
 ${plan.features.tests ? `
 [project.optional-dependencies]
 test = ["pytest==8.0.0"]
