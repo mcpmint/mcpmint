@@ -14,6 +14,12 @@ Generate MCP servers in your browser from OpenAPI and Postman specs. File/paste 
 
 ---
 
+## 🎬 Launch Video
+
+[![Watch the MCPmint launch video — Your API. Minted for MCP.](docs/assets/mcpmint-launch-poster.png)](docs/assets/mcpmint-launch.mp4)
+
+[Watch the 55-second launch video](docs/assets/mcpmint-launch.mp4) to see spec import, endpoint selection, compact mode, Trust Scan, and server export.
+
 ## ✨ Features
 
 - **Flexible import** — Upload a file, paste a spec (or ⌘V / Ctrl+V straight onto the landing page), or fetch from a URL. OpenAPI/Swagger and Postman v2.1 collections are all supported. URL fetches run through a server-side, SSRF-hardened proxy so browser CORS never blocks them, and one click loads a built-in Petstore sample.
