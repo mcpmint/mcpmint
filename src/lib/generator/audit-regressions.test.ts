@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { parseOpenAPIFromContent } from "../parsers/openapi.ts";
+import { buildPostmanApiModel } from "../api-model/postman.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "../../../cli/src/build-request.ts";
 import { prepareGeneratedProject } from "./core.ts";
 
@@ -154,4 +155,26 @@ test("Python servers compile when names collide with keywords or generated local
     // Node keeps the original names, because it reads arguments by key.
     const { project: node } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "node", framework: "mcp-ts-sdk" } });
     assert.match(node.files.get("src/api/operations.ts")!, /args\["from"\]/);
+});
+
+test("Postman requests with different API keys keep separate auth schemes", () => {
+    const apiKey = (name: string) => ({ type: "apikey", apikey: [{ key: "key", value: name }] });
+    const model = buildPostmanApiModel({
+        info: { name: "Auth", schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+        item: [
+            { name: "A", request: { method: "GET", url: "https://a.example/items", auth: apiKey("X-Key-A") } },
+            { name: "B", request: { method: "GET", url: "https://b.example/items", auth: apiKey("X-Key-B") } },
+            { name: "C", request: { method: "GET", url: "https://a.example/other", auth: apiKey("X-Key-A") } },
+        ],
+    } as Parameters<typeof buildPostmanApiModel>[0]);
+
+    assert.deepEqual(model.securitySchemes, {
+        apiKey: { type: "apiKey", in: "header", name: "X-Key-A" },
+        apiKey_2: { type: "apiKey", in: "header", name: "X-Key-B" },
+    });
+    assert.deepEqual(model.operations.map((operation) => operation.security), [
+        [{ apiKey: [] }],
+        [{ apiKey_2: [] }],
+        [{ apiKey: [] }],
+    ]);
 });
