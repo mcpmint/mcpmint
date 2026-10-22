@@ -65,7 +65,12 @@ export async function pinnedGet(
                 }) as typeof import("node:dns").lookup,
             },
             (incoming) => {
-                resolve(incomingMessageToFetchResponse(incoming));
+                try {
+                    resolve(incomingMessageToFetchResponse(incoming));
+                } catch (error) {
+                    incoming.destroy();
+                    reject(error);
+                }
             }
         );
 
@@ -94,6 +99,9 @@ function abortError(): Error {
     return error;
 }
 
+// The Response constructor throws if these statuses get a body.
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 function incomingMessageToFetchResponse(incoming: IncomingMessage): Response {
     const status = incoming.statusCode || 0;
     const statusText = incoming.statusMessage || "";
@@ -103,6 +111,11 @@ function incomingMessageToFetchResponse(incoming: IncomingMessage): Response {
     for (const [key, value] of Object.entries(incoming.headers)) {
         if (value === undefined) continue;
         headerInit[key] = Array.isArray(value) ? value.join(", ") : value;
+    }
+
+    if (NULL_BODY_STATUSES.has(status)) {
+        incoming.resume();
+        return new Response(null, { status, statusText, headers: headerInit });
     }
 
     const stream = new ReadableStream<Uint8Array>({

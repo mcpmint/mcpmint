@@ -42,3 +42,23 @@ test("pinnedGet rejects invalid pinned IPs", async () => {
         /pinnedIp/
     );
 });
+
+test("pinnedGet returns a body-less response for 204 instead of throwing", async () => {
+    const server = http.createServer((_req, res) => {
+        res.writeHead(204);
+        res.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+
+    try {
+        const response = await pinnedGet(new URL(`http://example.test:${port}/`), "127.0.0.1");
+        assert.equal(response.status, 204);
+        assert.equal(response.body, null);
+    } finally {
+        await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+        });
+    }
+});
