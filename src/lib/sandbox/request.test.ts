@@ -27,6 +27,11 @@ test("inspects the exact stored method, path, query, headers, and body", () => {
     assert.deepEqual(JSON.parse(request.body || ""), { name: "Ada" });
 });
 
+test("omits query parameters that the caller did not give", () => {
+    const request = inspectToolRequest(tool, "https://api.example.com", { id: "u-1", name: "Ada" });
+    assert.equal(request.url, "https://api.example.com/users/u-1");
+});
+
 test("requires mandatory arguments and creates schema-based samples", () => {
     assert.throws(() => inspectToolRequest(tool, "https://api.example.com", {}), /Missing required arguments: id, name/);
     assert.deepEqual(sampleArguments(tool), { id: "u-1", name: "sample" });

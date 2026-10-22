@@ -311,9 +311,10 @@ export function getExpectedPath(tool: GenerationTool, args: Record<string, unkno
         }, tool.path);
 }
 
+// Like the generated appendSerializedParameter, omit undefined and null values.
 export function getExpectedQueryEntries(tool: GenerationTool, args: Record<string, unknown>): [string, string][] {
     return tool.params
-        .filter((entry) => entry.location === "query")
+        .filter((entry) => entry.location === "query" && args[entry.argName] !== undefined && args[entry.argName] !== null)
         .flatMap((param) => expectedQueryEntries(param.sourceName, args[param.argName], {
             style: param.style,
             explode: param.explode,
