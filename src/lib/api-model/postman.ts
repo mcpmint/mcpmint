@@ -499,13 +499,24 @@ function securityFromAuth(auth?: PostmanAuth | null): {
     return { schemes: {}, requirements: [] };
 }
 
+// Add schemes under their own ids. Two different API-key settings both start as
+// "apiKey", so give the second one "apiKey_2" and point its requirements there.
 function mergeSecuritySchemes(
     target: ApiModel["securitySchemes"],
-    source: ApiModel["securitySchemes"]
-) {
-    for (const [key, value] of Object.entries(source)) {
-        target[key] = value;
+    source: { schemes: ApiModel["securitySchemes"]; requirements: ApiSecurityRequirement[] }
+): ApiSecurityRequirement[] {
+    const renamed = new Map<string, string>();
+    for (const [key, value] of Object.entries(source.schemes)) {
+        let id = key;
+        for (let counter = 2; target[id] && JSON.stringify(target[id]) !== JSON.stringify(value); counter++) {
+            id = `${key}_${counter}`;
+        }
+        target[id] = value;
+        renamed.set(key, id);
     }
+    return source.requirements.map((requirement) => Object.fromEntries(
+        Object.entries(requirement).map(([key, scopes]) => [renamed.get(key) ?? key, scopes])
+    ));
 }
 
 function shouldExcludeGeneratedAuthHeader(header: PostmanHeader, auth?: PostmanAuth | null): boolean {
@@ -565,8 +576,7 @@ export function buildPostmanApiModel(
         if (!HTTP_METHODS.has(method)) return;
 
         const effectiveAuth = item.request.auth !== undefined ? item.request.auth : inheritedAuth;
-        const operationAuth = securityFromAuth(effectiveAuth);
-        mergeSecuritySchemes(securitySchemes, operationAuth.schemes);
+        const operationRequirements = mergeSecuritySchemes(securitySchemes, securityFromAuth(effectiveAuth));
 
         const url = parseUrl(item.request.url, variables);
         const origin = requestOrigin(item.request.url, variables);
@@ -595,7 +605,7 @@ export function buildPostmanApiModel(
             parameters: [...url.parameters, ...headerParameters],
             requestBody: normalizeRequestBody(item.request.body),
             responses: normalizeResponses(item.response),
-            security: effectiveAuth === undefined ? undefined : operationAuth.requirements,
+            security: effectiveAuth === undefined ? undefined : operationRequirements,
             source: {
                 name: item.name,
                 folderPath,

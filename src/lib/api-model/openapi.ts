@@ -57,13 +57,26 @@ function removeUndefined<T extends Record<string, unknown>>(value: T): T {
 function resolveServerUrl(server: ApiServer): string {
     if (!server.variables) return server.url;
 
+    // split/join, not a RegExp: names such as "port(" and defaults such as "$&"
+    // must be used literally.
     return Object.entries(server.variables).reduce((url, [name, variable]) =>
-        url.replace(new RegExp(`\\{${name}\\}`, "g"), variable.default),
+        url.split(`{${name}}`).join(variable.default),
         server.url
     );
 }
 
-function normalizeServers(api: OpenAPISpec): ApiServer[] {
+// OpenAPI allows relative server URLs ("/api/v3"). They are relative to the
+// document URL, so resolve them when the spec was imported from a URL.
+function resolveAgainstDocument(url: string, documentUrl?: string): string {
+    if (!documentUrl || /^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
+    try {
+        return new URL(url, documentUrl).toString().replace(/\/$/, "");
+    } catch {
+        return url;
+    }
+}
+
+function normalizeServers(api: OpenAPISpec, documentUrl?: string): ApiServer[] {
     if (Array.isArray(api.servers) && api.servers.length > 0) {
         return api.servers.flatMap((server) => {
             const record = asRecord(server);
@@ -93,7 +106,7 @@ function normalizeServers(api: OpenAPISpec): ApiServer[] {
 
             return [{
                 ...normalizedServer,
-                resolvedUrl: resolveServerUrl(normalizedServer),
+                resolvedUrl: resolveAgainstDocument(resolveServerUrl(normalizedServer), documentUrl),
             }];
         });
     }
@@ -105,6 +118,12 @@ function normalizeServers(api: OpenAPISpec): ApiServer[] {
             url,
             resolvedUrl: url,
         }];
+    }
+
+    // Swagger 2.0 without "host" means the host that serves the document.
+    if (api.swagger === "2.0" && documentUrl) {
+        const url = api.basePath || "/";
+        return [{ url, resolvedUrl: resolveAgainstDocument(url, documentUrl) }];
     }
 
     return [];
@@ -152,6 +171,18 @@ function schemaFromSwaggerParameter(parameter: Record<string, unknown>): Record<
     });
 }
 
+// Swagger 2.0 arrays use collectionFormat (default "csv") instead of style and
+// explode. Map it to the OpenAPI 3 serialization that sends the same value.
+function swaggerArraySerialization(parameter: Record<string, unknown>, location: string): { style: string; explode: boolean } | undefined {
+    if (parameter.schema || parameter.type !== "array") return undefined;
+    const format = asString(parameter.collectionFormat) || "csv";
+    if (format === "multi" && location === "query") return { style: "form", explode: true };
+    if (format === "ssv" && location === "query") return { style: "spaceDelimited", explode: false };
+    if (format === "pipes" && location === "query") return { style: "pipeDelimited", explode: false };
+    if (format === "csv") return { style: location === "query" || location === "cookie" ? "form" : "simple", explode: false };
+    return undefined;
+}
+
 function normalizeParameter(value: unknown, level: "path" | "operation"): ApiParameter | undefined {
     const parameter = asRecord(value);
     const name = asString(parameter?.name);
@@ -164,6 +195,7 @@ function normalizeParameter(value: unknown, level: "path" | "operation"): ApiPar
     const schema = asRecord(parameter.schema) || schemaFromSwaggerParameter(parameter);
 
     const content = normalizeMediaTypes(parameter.content);
+    const swaggerSerialization = swaggerArraySerialization(parameter, String(location));
 
     return {
         name,
@@ -173,8 +205,8 @@ function normalizeParameter(value: unknown, level: "path" | "operation"): ApiPar
         description: asString(parameter.description),
         deprecated: asBoolean(parameter.deprecated),
         allowEmptyValue: asBoolean(parameter.allowEmptyValue),
-        style: asString(parameter.style),
-        explode: asBoolean(parameter.explode),
+        style: asString(parameter.style) ?? swaggerSerialization?.style,
+        explode: asBoolean(parameter.explode) ?? swaggerSerialization?.explode,
         allowReserved: asBoolean(parameter.allowReserved),
         content: content.length > 0 ? content : undefined,
         example: parameter.example,
@@ -354,13 +386,14 @@ function normalizeSecuritySchemes(api: OpenAPISpec): Record<string, Record<strin
 }
 
 export function buildOpenAPIModel(api: OpenAPISpec, source: Partial<ApiSourceMetadata> = {}): ApiModel {
-    const servers = normalizeServers(api);
+    const documentUrl = source.importedFrom;
+    const servers = normalizeServers(api, documentUrl);
     const globalSecurity = normalizeSecurityRequirements(api.security);
     const operations: ApiOperation[] = [];
 
     for (const [path, pathItemValue] of Object.entries(api.paths || {})) {
         const pathItem = asRecord(pathItemValue) || {};
-        const pathServers = normalizeServers(pathItem as OpenAPISpec);
+        const pathServers = normalizeServers(pathItem as OpenAPISpec, documentUrl);
         const pathParameters = Array.isArray(pathItem.parameters)
             ? pathItem.parameters
                 .map((parameter) => normalizeParameter(parameter, "path"))
@@ -394,7 +427,7 @@ export function buildOpenAPIModel(api: OpenAPISpec, source: Partial<ApiSourceMet
                 security: operation.security === undefined
                     ? undefined
                     : normalizeSecurityRequirements(operation.security),
-                servers: normalizeServers(operation as OpenAPISpec),
+                servers: normalizeServers(operation as OpenAPISpec, documentUrl),
                 pathServers,
             });
         }

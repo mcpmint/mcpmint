@@ -45,7 +45,7 @@ export function validateGenerationPlan(plan: GenerationPlan): ValidationResult {
                 const url = new URL(tool.baseUrl);
                 if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new Error("unsupported URL");
             } catch {
-                pushIssue(errors, "error", "Operation server must resolve to an absolute HTTP(S) URL without embedded credentials.", tool.id);
+                pushIssue(errors, "error", "Operation server must resolve to an absolute HTTP(S) URL without embedded credentials. Enter a full API base URL.", tool.id);
             }
         }
         if (!tool.displayName.trim()) {

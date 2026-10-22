@@ -88,3 +88,24 @@ test("leaves benign imperative descriptions green", () => {
 
     assert.deepEqual(findings, []);
 });
+
+test("scans union branches, array items and tool titles", () => {
+    const findings = checkHiddenInstructions([{
+        name: "login",
+        title: "Log in​",
+        description: "Log in a user.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                secret: { anyOf: [{ type: "string", description: "Password​" }, { type: "null" }] },
+                tags: { type: "array", items: { type: "string", description: "Tag‮" } },
+            },
+        },
+    }]);
+
+    assert.deepEqual(findings.map((item) => item.message), [
+        'zero-width characters hidden in title of "login"',
+        'zero-width characters hidden in inputSchema property "secret" of "login"',
+        'bidirectional control characters hidden in inputSchema property "tags" of "login"',
+    ]);
+});

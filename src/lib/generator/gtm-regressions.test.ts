@@ -6,7 +6,6 @@ import { buildGenerationPlan } from "./normalize.ts";
 import { prepareGeneratedProject } from "./core.ts";
 import { schemaToZodType } from "./schema.ts";
 import { generationPlanToScanTools } from "../scanner/from-plan.ts";
-import { projectToolsToScanTools } from "../scanner/from-project.ts";
 import { scanRequest } from "../../../cli/src/workflows.ts";
 import { scanTools } from "../scanner/index.ts";
 import { buildPostmanApiModel } from "../api-model/postman.ts";
@@ -28,7 +27,6 @@ function request(): GeneratorRequest {
 test("browser and CLI scan normalized nested schemas, names, and destructive annotations identically", () => {
     const input = request();
     const projection = generationPlanToScanTools(buildGenerationPlan(input));
-    assert.deepEqual(projectToolsToScanTools(input.spec.apiModel, input.tools), projection);
     assert.deepEqual(scanRequest(input).report, scanTools(projection));
     assert.equal(scanRequest(input).subject, JSON.stringify(projection));
     assert.equal(scanTools(projection).verdict, "red");

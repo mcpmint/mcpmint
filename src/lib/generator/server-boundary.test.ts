@@ -17,10 +17,13 @@ test("the public generation route stays outside process-spawning verification", 
 
 test("browser compression stays inside a dedicated worker without nested blob workers", () => {
     const generator = readFileSync(join(directory, "../client-generate.ts"), "utf8");
+    const archive = readFileSync(join(directory, "archive.ts"), "utf8");
     const worker = readFileSync(join(directory, "../processing/task.worker.ts"), "utf8");
     const client = readFileSync(join(directory, "../processing/client.ts"), "utf8");
     const page = readFileSync(join(directory, "../../app/export/page.tsx"), "utf8");
-    assert.match(generator, /import \{ zipSync, strToU8 \} from ["']fflate["']/);
+    assert.match(generator, /from ["']@\/lib\/generator\/archive["']/);
+    assert.doesNotMatch(generator, /from ["']@\/lib\/generator["']/);
+    assert.match(archive, /import \{ strToU8, zipSync \} from ["']fflate["']/);
     assert.match(worker, /await import\("\.\.\/client-generate"\)/);
     assert.match(client, /new Worker\(new URL/);
     assert.match(client, /worker\.terminate\(\)/);

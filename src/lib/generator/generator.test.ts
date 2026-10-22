@@ -1834,7 +1834,9 @@ test("node sse preview exposes message endpoint and per-session server", () => {
 
     assert.equal(preview.verification?.status, "passed");
     const indexFile = getFileContent(preview, "src/index.ts");
-    assert.match(indexFile, /const sessions: Record<string, \{ transport: SSEServerTransport; server: McpServer \}> = \{\};/);
+    assert.match(indexFile, /const sessions = new Map<string, \{ transport: SSEServerTransport; server: McpServer \}>\(\);/);
+    assert.match(indexFile, /const session = sessions\.get\(sessionId\);/);
+    assert.match(indexFile, /await handleSseRequest\(req, res\);/);
     assert.match(indexFile, /const transport = new SSEServerTransport\("\/messages", res\);/);
     assert.match(indexFile, /const server = createServer\(\);/);
     assert.match(indexFile, /await session\.transport\.handlePostMessage\(req, res\);/);

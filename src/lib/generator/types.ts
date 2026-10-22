@@ -180,6 +180,7 @@ export interface ToolPlan {
     baseUrl?: string;
     toolName: string;
     title?: string;
+    tags: string[];
     inputSchema: Record<string, unknown>;
     outputSchema?: Record<string, unknown>;
     annotations?: ToolAnnotations;
@@ -314,6 +315,8 @@ export interface GenerationTool {
     title?: string;
     outputSchema?: Record<string, unknown>;
     annotations?: ToolAnnotations;
+    // Operation tags, used by the compact-mode tag filter.
+    tags?: string[];
 }
 
 export interface GenerationParam {

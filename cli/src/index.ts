@@ -4,11 +4,11 @@
 
 import { readFileSync, existsSync, readdirSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { parseOpenAPIFromContent } from "../../src/lib/parsers/openapi.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "./build-request.ts";
-import { generateProject, generateToDisk } from "./generate.ts";
+import { generateProject, writeProjectFiles } from "./generate.ts";
 import { inspectSpec } from "./inspect.ts";
 import { analyzeCapabilities, type SelectionPreset } from "../../src/lib/capabilities.ts";
 import { createRequestAttestation, formatScan, scanRequest, testRequest } from "./workflows.ts";
@@ -47,7 +47,7 @@ GENERATE OPTIONS
   --no-tests                    Skip generated smoke tests
   --no-docs                     Skip README/docs
   --docker                      Include Dockerfile + compose
-  --force                       Overwrite a non-empty output directory
+  --force                       Write into a non-empty output directory (keeps your files)
   --accept-risk                 Allow generation when Trust Scan verdict is red
   --attestation <file>          Write the Trust Scan attestation JSON
   --mcp-auth <none|bearer>      Protect HTTP/SSE MCP access (default: none)
@@ -226,18 +226,35 @@ async function runGenerate(specPath: string, rawArgs: string[]) {
 
     let result;
     try {
-        if (outputFormat === "dir") result = generateToDisk(request, outDir, verify, replaceExisting);
-        else {
-            result = generateProject(request, verify);
-            const archive = createTarGzip(result.files);
-            if (values.stdout) process.stdout.write(archive);
-            else writeFileSync(configuredOut ? outDir : `${outDir}.tar.gz`, archive);
-        }
+        result = generateProject(request, verify);
     } catch (error) {
         fail(error instanceof Error ? error.message : "generation failed");
     }
 
-    diagnostics.write(`\n  Generated ${result.fileCount} files to ${values.stdout ? "stdout" : outputFormat === "tar" ? (configuredOut ? outDir : `${outDir}.tar.gz`) : outDir}\n`);
+    // Check before writing, so a failed check never replaces working output.
+    if (result.verification) {
+        const { status, mode, checks } = result.verification;
+        diagnostics.write(`\n  Verification (${mode}): ${status}\n`);
+        for (const check of checks) {
+            const mark = check.status === "passed" ? "PASS" : check.status === "failed" ? "FAIL" : "skip";
+            diagnostics.write(`    [${mark}] ${check.name}${check.details ? ` — ${check.details}` : ""}\n`);
+        }
+        if (status === "failed") {
+            process.stderr.write(`\n  Generated output failed verification. Nothing was written.\n`);
+            process.exit(2);
+        }
+    }
+
+    const destination = values.stdout ? "stdout" : outputFormat === "tar" ? (configuredOut ? outDir : `${outDir}.tar.gz`) : outDir;
+    try {
+        if (outputFormat === "dir") writeProjectFiles(result.files, outDir, replaceExisting);
+        else if (values.stdout) process.stdout.write(createTarGzip(result.files));
+        else writeFileSync(destination, createTarGzip(result.files));
+    } catch (error) {
+        fail(error instanceof Error ? error.message : "could not write output");
+    }
+
+    diagnostics.write(`\n  Generated ${result.fileCount} files to ${destination}\n`);
     diagnostics.write(
         `  ${request.exportConfig.language} · ${request.serverConfig.transport} · ` +
             `${options.compactMode ? "compact (3 meta-tools)" : `${request.tools.length} tools`}\n`,
@@ -253,36 +270,44 @@ async function runGenerate(specPath: string, rawArgs: string[]) {
         }
     }
 
-    if (result.verification) {
-        const { status, mode, checks } = result.verification;
-        diagnostics.write(`\n  Verification (${mode}): ${status}\n`);
-        for (const check of checks) {
-            const mark = check.status === "passed" ? "PASS" : check.status === "failed" ? "FAIL" : "skip";
-            diagnostics.write(`    [${mark}] ${check.name}${check.details ? ` — ${check.details}` : ""}\n`);
-        }
-        if (status === "failed") {
-            process.stderr.write(`\n  Generated output failed verification.\n`);
-            process.exit(2);
-        }
-    }
-
     if (outputFormat === "dir") diagnostics.write(`\n  Next: cd ${outDir} && see README.md\n\n`);
-    if (values.watch) {
-        diagnostics.write(`\n  Watching ${resolve(specPath)} for changes…\n`);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        watch(resolve(specPath), () => {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
-                const args = process.argv.slice(1).filter((argument) => argument !== "--watch");
-                if (!args.includes("--force")) args.push("--force");
-                const child = spawn(process.execPath, args, { stdio: "inherit" });
-                child.on("exit", (code) => {
-                    if (code === 0) diagnostics.write("  Regeneration complete.\n");
-                    else diagnostics.write(`  Regeneration failed with exit code ${code ?? "unknown"}.\n`);
-                });
-            }, 250);
+    if (values.watch) watchSpec(resolve(specPath), diagnostics);
+}
+
+// Editors often save by writing a new file and renaming it over the old one,
+// so watch the folder and filter by name. Run one regeneration at a time and
+// keep at most one pending run, so an older run never overwrites newer output.
+function watchSpec(specFile: string, diagnostics: NodeJS.WritableStream) {
+    diagnostics.write(`\n  Watching ${specFile} for changes…\n`);
+    const args = process.argv.slice(1).filter((argument) => argument !== "--watch");
+    if (!args.includes("--force")) args.push("--force");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let running = false;
+    let pending = false;
+
+    const regenerate = () => {
+        if (running) {
+            pending = true;
+            return;
+        }
+        running = true;
+        const child = spawn(process.execPath, args, { stdio: "inherit" });
+        child.on("exit", (code) => {
+            if (code === 0) diagnostics.write("  Regeneration complete.\n");
+            else diagnostics.write(`  Regeneration failed with exit code ${code ?? "unknown"}.\n`);
+            running = false;
+            if (pending) {
+                pending = false;
+                regenerate();
+            }
         });
-    }
+    };
+
+    watch(dirname(specFile), (_event, filename) => {
+        if (filename !== basename(specFile)) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(regenerate, 250);
+    });
 }
 
 async function runInspect(specPath: string) {

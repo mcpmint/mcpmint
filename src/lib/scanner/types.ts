@@ -7,6 +7,7 @@ export type CheckId =
 
 export interface ScanTool {
     name: string;
+    title?: string;
     description?: string;
     inputSchema?: unknown;
     method?: string;

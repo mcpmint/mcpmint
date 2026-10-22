@@ -257,6 +257,7 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
     authConfig,
     mcpServerAuthConfig,
     setServerConfig,
+    setSpecBaseUrl,
     setExportConfig,
     setAuthConfig,
     setMcpServerAuthConfig,
@@ -432,10 +433,10 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
           `${manualReviewEndpoints.length} selected endpoint${manualReviewEndpoints.length === 1 ? "" : "s"} need manual review.`,
         ]
       : []),
-    ...(spec.baseUrl
+    ...(isAbsoluteHttpUrl(spec.baseUrl)
       ? []
       : [
-          "No base URL was detected; generated code will use the configured fallback.",
+          "The spec has no full API base URL. Enter one under Server > API base URL.",
         ]),
   ];
   const previewWarnings = [
@@ -827,6 +828,18 @@ function ExportContent({ spec }: { spec: ParsedSpec }) {
                     value={serverConfig.host}
                     onChange={(v) => setServerConfig({ host: v })}
                   />
+                  <div className="sm:col-span-2 space-y-1.5">
+                    <Field
+                      label="API base URL"
+                      value={spec.baseUrl}
+                      onChange={(v) => setSpecBaseUrl(v.trim())}
+                    />
+                    {!isAbsoluteHttpUrl(spec.baseUrl) && (
+                      <p className="text-xs text-muted-foreground">
+                        The spec lists a relative server. Enter the full URL, for example https://api.example.com.
+                      </p>
+                    )}
+                  </div>
                   <div className="space-y-1.5">
                     <Label
                       htmlFor="server-port"
@@ -1614,6 +1627,15 @@ function ResponsiveDisclosure({
       </div>
     </details>
   );
+}
+
+function isAbsoluteHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function Field({

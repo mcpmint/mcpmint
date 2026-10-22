@@ -14,7 +14,7 @@ export interface PreparedImport {
 }
 
 export type ProcessingRequest =
-  | { action: "parse"; file?: File; content?: string; filename: string }
+  | { action: "parse"; file?: File; content?: string; filename: string; sourceUrl?: string }
   | { action: "project-import"; file?: File; content?: string }
   | { action: "project-validate"; project: PortableProjectFile }
   | { action: "snapshot-validate"; snapshot: unknown }

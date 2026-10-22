@@ -192,13 +192,3 @@ export function getDefaultFeatures(exportConfig: GeneratorExportConfig): Generat
         verification: exportConfig.features?.verification ?? false,
     };
 }
-
-export function getNodeInstallCommand(packageManager: string): string {
-    return `${packageManager} install`;
-}
-
-export function getNodeScriptCommand(packageManager: string, script: string): string {
-    return packageManager === "npm"
-        ? `npm run ${script}`
-        : `${packageManager} ${script}`;
-}

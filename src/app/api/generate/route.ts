@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ZodError } from "zod";
 import { createServerArchive, createServerPreview } from "@/lib/generator/server";
+import { sanitizeRootFolder } from "@/lib/generator/archive";
 import { parseGeneratorRequestPayload } from "@/lib/generator/request";
 import type { GeneratorRequest } from "@/lib/generator/types";
 import {
@@ -16,14 +16,6 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024;
 // Keep generate/preview within a predictable serverless budget. Process-spawning
 // verification is off by default on the public path, so this stays short.
 export const maxDuration = 60;
-
-// Mirror the request-validation charset so the value placed into the
-// Content-Disposition header can never contain quotes, newlines or path
-// separators (header-injection defense).
-function sanitizeFilename(name: string): string {
-    const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^[.-]+/, "").slice(0, 64);
-    return cleaned.length > 0 ? cleaned : "mcp-server";
-}
 
 /**
  * The HTTP generation path never spawns tsc/npm/pip. Full process verification
@@ -70,14 +62,7 @@ export async function POST(request: NextRequest) {
     let body: GeneratorRequest;
     try {
         body = parseGeneratorRequestPayload(rawBody);
-    } catch (error) {
-        if (error instanceof ZodError) {
-            return NextResponse.json(
-                { error: "Invalid request payload." },
-                { status: 400 }
-            );
-        }
-
+    } catch {
         return NextResponse.json(
             { error: "Invalid request payload." },
             { status: 400 }
@@ -93,12 +78,12 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(createServerPreview(body));
         }
 
-        const { archive } = await createServerArchive(body);
+        const { archive } = createServerArchive(body);
 
-        return new NextResponse(new Uint8Array(archive), {
+        return new NextResponse(archive.slice(), {
             headers: {
                 "Content-Type": "application/zip",
-                "Content-Disposition": `attachment; filename="${sanitizeFilename(body.serverConfig.name)}.zip"`,
+                "Content-Disposition": `attachment; filename="${sanitizeRootFolder(body.serverConfig.name)}.zip"`,
             },
         });
     } catch (error) {

@@ -338,7 +338,7 @@ function getRequestBodyStrategy(
         return { required: false };
     }
 
-    const contentKind = getBodyContentKind(
+    const flattenable = getBodyContentKind(
         {
             endpointId: operation.id,
             enabled: true,
@@ -350,9 +350,15 @@ function getRequestBodyStrategy(
         },
         []
     );
+    const required = operation.requestBody?.required || false;
+    // Flattened fields can only be optional when the body is optional, and the
+    // body would then be sent as {} even when the caller gives no fields. If
+    // that {} breaks the schema's required fields, keep one optional "body".
+    const hasRequiredFields = Array.isArray(media.schema?.required) && media.schema.required.length > 0;
+    const contentKind = flattenable === "flattenedObject" && !required && hasRequiredFields ? "rawJsonObject" : flattenable;
 
     return {
-        required: operation.requestBody?.required || false,
+        required,
         contentType: media.mediaType,
         contentKind,
         schema: media.schema,
@@ -448,6 +454,7 @@ export function planToolFromOperation(
             || apiModel.baseUrls[0],
         toolName,
         title,
+        tags: operation.tags ?? [],
         inputSchema: buildInputSchema(parameters),
         outputSchema: deriveOutputSchema(operation),
         annotations: deriveToolAnnotations(operation.method, title),

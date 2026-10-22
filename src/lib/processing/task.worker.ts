@@ -29,7 +29,7 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
         buildValidationSummary,
         buildEndpointWarnings,
       } = await import("../parsers/openapi");
-      const spec = await parseOpenAPIFromContent(text, data.filename);
+      const spec = await parseOpenAPIFromContent(text, data.filename, data.sourceUrl);
       // Raw imports are unnecessary after normalization and amplify storage substantially.
       for (const operation of spec.apiModel!.operations) {
         if (operation.source) delete operation.source.raw;
@@ -134,7 +134,7 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
       if (data.action === "preview")
         result = previewProjectInBrowser(data.payload);
       else {
-        const generated = await generateProjectInBrowser(data.payload);
+        const generated = generateProjectInBrowser(data.payload);
         // Blob storage is shared across threads; do not clone the full generated file map into the UI.
         result = { blob: generated.blob, filename: generated.filename };
       }

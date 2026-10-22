@@ -316,7 +316,8 @@ function renderIndex(plan: GenerationPlan): string {
     // literals to patch. Only the transport-agnostic scaffolding lives here.
     const bootstrap = transportStrategy.bootstrap;
 
-    return `import "dotenv/config";
+    return `#!/usr/bin/env node
+import "dotenv/config";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 ${transportStrategy.imports}
 import { ${plan.runtime.transport === "stdio" ? "MCP_SERVER_CONFIG" : "MCP_SERVER_CONFIG, assertMcpServerAccessConfig"} } from "./config.js";
@@ -657,7 +658,17 @@ export function serializeParameterValue(name: string, value: unknown, options: S
   return scalarToString(value);
 }
 
+// encodeURIComponent keeps "." and "..", and URL parsing then drops or climbs
+// that segment, so fetch would call a different endpoint. Reject them.
 export function serializePathParameter(name: string, value: unknown, options: SerializedParameterOptions): string {
+  const serialized = serializePathParameterValue(name, value, options);
+  if (serialized === "." || serialized === "..") {
+    throw new Error(\`Path parameter "\${name}" cannot be "." or "..".\`);
+  }
+  return serialized;
+}
+
+function serializePathParameterValue(name: string, value: unknown, options: SerializedParameterOptions): string {
   const style = options.style || "simple";
   const explode = shouldExplode(style, options.explode);
   const encode = (entry: unknown) => encodeURIComponent(scalarToString(entry));
@@ -816,7 +827,7 @@ function renderCompactRegistryEntry(tool: GenerationTool, index: number): string
         `    path: ${JSON.stringify(tool.path)}`,
         `    summary: ${toJsStringLiteral((tool.title || tool.description || "").slice(0, 120))}`,
         `    description: ${toJsStringLiteral(tool.description)}`,
-        `    tags: [] as string[]`,
+        `    tags: ${JSON.stringify(tool.tags ?? [])} as string[]`,
         `    parameters: [\n${parameterDescriptors}\n    ]`,
         `    bodyContentKind: ${JSON.stringify(tool.requestBody?.contentKind ?? null)}`,
         `    bodyParamNames: ${JSON.stringify(bodyParamNames)}`,
@@ -888,14 +899,14 @@ function decodeCursor(cursor: string | undefined): number {
 // keys — so the model cannot smuggle in unknown parameters.
 function toOperationArgs(
   operation: MetaOperation,
-  parameters: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } | undefined
+  parameters: { path?: unknown; query?: unknown; header?: unknown; cookie?: unknown; body?: unknown } | undefined
 ): Record<string, unknown> {
   const args: Record<string, unknown> = {};
   const buckets: Record<string, Record<string, unknown>> = {
     path: asObject(parameters?.path),
     query: asObject(parameters?.query),
     header: asObject(parameters?.header),
-    cookie: asObject((parameters as Record<string, unknown> | undefined)?.cookie),
+    cookie: asObject(parameters?.cookie),
   };
 
   for (const parameter of operation.parameters) {
@@ -1059,6 +1070,7 @@ export function createServer() {
           path: z.record(z.unknown()).optional(),
           query: z.record(z.unknown()).optional(),
           header: z.record(z.unknown()).optional(),
+          cookie: z.record(z.unknown()).optional(),
           body: z.unknown().optional(),
         }).optional().describe("Inputs by location, plus a body key for the request body."),
       },
@@ -1070,7 +1082,7 @@ export function createServer() {
         openWorldHint: true,
       },
     },
-    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } }, extra) => {
+    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; cookie?: unknown; body?: unknown } }, extra) => {
       const respond = (payload: Record<string, unknown>, isError: boolean) => ({
         content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
         structuredContent: payload,
@@ -1433,6 +1445,8 @@ test("serialization helpers encode paths and queries", () => {
     serializePathParameter("ids", ["a", "b"], { location: "path", style: "matrix", explode: true }),
     ";ids=a;ids=b"
   );
+  assert.throws(() => serializePathParameter("id", "..", { location: "path" }), /cannot be/);
+  assert.throws(() => serializePathParameter("id", ".", { location: "path" }), /cannot be/);
 
   const params = new URLSearchParams();
   appendSerializedParameter(params, "filter", { status: "open" }, { location: "query", style: "deepObject", explode: true });
@@ -1474,8 +1488,12 @@ export function generateNodeProject(plan: GenerationPlan): GeneratedProject {
         // Cross-check field for the MCP registry: must equal the server.json `name`,
         // proving the published package and the registry entry share an owner.
         mcpName: `io.github.OWNER/${sanitizeServerId(plan.server.name)}`,
+        // server.json launches the package with npx, which runs this bin.
+        bin: { [plan.server.name]: "dist/src/index.js" },
+        files: ["dist"],
         scripts: {
             build: "tsc",
+            prepack: "npm run build",
             start: "node dist/src/index.js",
             dev: "tsx src/index.ts",
             test: "tsx --test tests/**/*.test.ts",

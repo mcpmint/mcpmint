@@ -5,6 +5,7 @@ import type { ScanTool } from "./types.ts";
 export function generationPlanToScanTools(plan: GenerationPlan): ScanTool[] {
     return plan.tools.map((tool) => ({
         name: tool.functionName,
+        title: tool.title || tool.annotations?.title,
         description: tool.description,
         method: tool.method,
         path: tool.path,

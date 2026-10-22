@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getClientIp, type ClientIpSource } from "./request-guards.ts";
+import { checkRateLimit, getClientIp, type ClientIpSource } from "./request-guards.ts";
 
 function fakeRequest(headers: Record<string, string>, ip?: string | null): ClientIpSource {
     const normalized = Object.fromEntries(
@@ -86,4 +86,38 @@ test("getClientIp trusts x-real-ip only when MCPMINT_TRUST_X_REAL_IP=1", () => {
 
 test("getClientIp falls back to unknown when no headers", () => {
     assert.equal(getClientIp(fakeRequest({})), "unknown");
+});
+
+async function countAllowed(request: ClientIpSource, route: string, attempts: number): Promise<number> {
+    let allowed = 0;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        if (!(await checkRateLimit(request, route)).limited) allowed++;
+    }
+    return allowed;
+}
+
+test("a Redis command error falls back to the memory limit", async () => {
+    const previous = { url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN, fetch: globalThis.fetch };
+    process.env.UPSTASH_REDIS_REST_URL = "https://redis.example.test";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "token";
+    globalThis.fetch = (async () => new Response(JSON.stringify([{ error: "ERR maxmemory" }, { result: 1 }]), { status: 200 })) as typeof fetch;
+    try {
+        assert.equal(await countAllowed(fakeRequest({}, "203.0.113.9"), "redis-error", 30), 20);
+    } finally {
+        if (previous.url === undefined) delete process.env.UPSTASH_REDIS_REST_URL; else process.env.UPSTASH_REDIS_REST_URL = previous.url;
+        if (previous.token === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN; else process.env.UPSTASH_REDIS_REST_TOKEN = previous.token;
+        globalThis.fetch = previous.fetch;
+    }
+});
+
+test("clients without a trusted IP share a larger bucket", async () => {
+    const warn = console.warn;
+    const warnings: unknown[] = [];
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+        assert.equal(await countAllowed(fakeRequest({}), "unknown-client", 250), 200);
+        assert.equal(warnings.length, 1);
+    } finally {
+        console.warn = warn;
+    }
 });

@@ -47,7 +47,7 @@ export function useProcessing() {
         if (!response.ok || typeof data.content !== "string")
           throw new Error(data.error || "Could not fetch the specification.");
         return await runProcessing<T>(
-          { action: "parse", content: data.content, filename: filename || url },
+          { action: "parse", content: data.content, filename: filename || url, sourceUrl: url },
           { signal: task.signal, onProgress: setStage },
         );
       } finally {

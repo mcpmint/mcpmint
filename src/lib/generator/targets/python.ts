@@ -362,7 +362,7 @@ function renderPythonCompactRegistryEntry(tool: GenerationTool): string {
         `        "path": ${JSON.stringify(tool.path)}`,
         `        "summary": ${toPythonStringLiteral((tool.title || tool.description || "").slice(0, 120))}`,
         `        "description": ${toPythonStringLiteral(tool.description)}`,
-        `        "tags": []`,
+        `        "tags": ${toPythonJsonLiteral(tool.tags ?? [])}`,
         `        "parameters": [\n${parameterDescriptors ? `${parameterDescriptors}\n        ` : ""}]`,
         `        "body_content_kind": ${tool.requestBody ? JSON.stringify(tool.requestBody.contentKind) : "None"}`,
         `        "body_param_names": ${toPythonJsonLiteral(bodyParamNames)}`,
@@ -693,8 +693,12 @@ def invoke_api_endpoint(endpointId: str, parameters: dict | None = None) -> dict
         }
 
 
-if __name__ == "__main__":
+def main() -> None:
 ${runLine}
+
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
@@ -734,8 +738,12 @@ mcp = FastMCP(MCP_SERVER_CONFIG["name"])
 
 
 ${plan.tools.map(renderPythonServerTool).join("\n")}
-if __name__ == "__main__":
+def main() -> None:
 ${runLine}
+
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
@@ -792,7 +800,9 @@ def is_bearer_authorized(authorization: str | None, token: str) -> bool:
     if not token or not authorization:
         return False
     # Constant-time comparison to avoid leaking the token via timing side channels.
-    return hmac.compare_digest(authorization, f"Bearer {token}")
+    # Compare bytes: compare_digest raises TypeError for non-ASCII str. Headers
+    # are decoded as latin-1, so encoding back with latin-1 gives the raw bytes.
+    return hmac.compare_digest(authorization.encode("latin-1"), f"Bearer {token}".encode("utf-8"))
 
 
 def _header(scope: Scope, name: str) -> str | None:
@@ -1008,7 +1018,8 @@ def response_to_tool_result(response: httpx.Response) -> dict:
     # would fail the tool call opaquely.
     if response.status_code >= 400:
         raise ToolError(f"Upstream returned HTTP {response.status_code}.")
-    if "application/json" in response.headers.get("content-type", ""):
+    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if media_type == "application/json" or media_type.endswith("+json"):
         return response.json()
     return {"text": response.text}
 `;
@@ -1067,6 +1078,15 @@ def serialize_parameter_value(name: str, value: object, options: dict) -> str:
 
 
 def serialize_path_parameter(name: str, value: object, options: dict) -> str:
+    # quote() keeps "." and "..", and URL parsing then drops or climbs that
+    # segment, so the HTTP client would call a different endpoint. Reject them.
+    serialized = _serialize_path_parameter_value(name, value, options)
+    if serialized in {".", ".."}:
+        raise ValueError(f'Path parameter "{name}" cannot be "." or "..".')
+    return serialized
+
+
+def _serialize_path_parameter_value(name: str, value: object, options: dict) -> str:
     style = options.get("style") or "simple"
     explode = should_explode(style, options.get("explode"))
     encoded_name = quote(name, safe="")
@@ -1465,6 +1485,9 @@ def test_serialization_helpers_encode_paths_and_queries(monkeypatch) -> None:
         ["a", "b"],
         {"location": "path", "style": "matrix", "explode": True},
     ) == ";ids=a;ids=b"
+    for dot_value in [".", ".."]:
+        with pytest.raises(ValueError, match="cannot be"):
+            serialization.serialize_path_parameter("id", dot_value, {"location": "path"})
 
     params: list[tuple[str, str]] = []
     serialization.append_serialized_parameter(
@@ -1527,6 +1550,10 @@ dependencies = [
     "uvicorn==0.35.0",
     "starlette==1.0.1",` : ""}
 ]
+
+# server.json launches the package with uvx, which runs this script.
+[project.scripts]
+${JSON.stringify(plan.server.name)} = "server:main"
 ${plan.features.tests ? `
 [project.optional-dependencies]
 test = ["pytest==8.0.0"]
