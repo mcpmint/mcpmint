@@ -112,3 +112,46 @@ print(serialization.serialize_path_parameter("id", "a.b", {"location": "path"}))
         rmSync(directory, { recursive: true, force: true });
     }
 });
+
+test("Python servers compile when names collide with keywords or generated locals", async () => {
+    const request = await requestFor({
+        openapi: "3.0.3",
+        info: { title: "Names", version: "1" },
+        servers: [{ url: "https://api.example.com" }],
+        paths: {
+            "/files/{path}": {
+                get: {
+                    operationId: "import",
+                    parameters: [
+                        { name: "path", in: "path", required: true, schema: { type: "string" } },
+                        { name: "from", in: "query", schema: { type: "string" } },
+                        { name: "params", in: "query", schema: { type: "string" } },
+                    ],
+                    responses: { "200": { description: "ok" } },
+                },
+            },
+            "/mcp": { get: { operationId: "mcp", responses: { "200": { description: "ok" } } } },
+        },
+    }, { language: "python" });
+    const python = { ...request, exportConfig: { ...request.exportConfig, language: "python" as const, framework: "fastmcp" as const } };
+    const { project } = prepareGeneratedProject(python);
+    const directory = mkdtempSync(join(tmpdir(), "mcpmint-names-py-"));
+    try {
+        for (const [name, content] of project.files) {
+            if (!name.endsWith(".py")) continue;
+            const file = join(directory, name.replaceAll("/", "__"));
+            writeFileSync(file, content);
+            execFileSync("python3", ["-m", "py_compile", file]);
+        }
+        const operations = project.files.get("src/operations.py")!;
+        assert.match(operations, /serialize_path_parameter\("path", path_2,/);
+        assert.match(operations, /append_serialized_parameter\(params, "params", params_2,/);
+        assert.doesNotMatch(project.files.get("src/server.py")!, /^def (mcp|import)\(/m);
+    } finally {
+        rmSync(directory, { recursive: true, force: true });
+    }
+
+    // Node keeps the original names, because it reads arguments by key.
+    const { project: node } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "node", framework: "mcp-ts-sdk" } });
+    assert.match(node.files.get("src/api/operations.ts")!, /args\["from"\]/);
+});

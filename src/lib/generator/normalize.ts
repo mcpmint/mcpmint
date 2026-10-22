@@ -170,13 +170,36 @@ function isParameterHidden(
     return true;
 }
 
+const PYTHON_KEYWORDS = [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
+    "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+];
+
+// Python arguments become function parameters, so they must not be keywords or
+// names that the generated operation function uses (locals and helpers).
+const PYTHON_RESERVED_ARGS: ReadonlySet<string> = new Set([
+    ...PYTHON_KEYWORDS,
+    "path", "params", "request_headers", "cookies", "json_body", "form_body", "multipart_files", "response",
+    "validate_arguments", "serialize_path_parameter", "append_serialized_parameter", "serialize_parameter_value",
+    "apply_auth", "request_api", "response_to_tool_result", "base64", "str",
+]);
+
+// Python tool functions are module-level names in server.py.
+const PYTHON_RESERVED_FUNCTIONS: ReadonlySet<string> = new Set([
+    ...PYTHON_KEYWORDS,
+    "mcp", "logging", "sys", "json", "base64", "binascii", "annotations", "FastMCP", "FunctionTool",
+    "ToolAnnotations", "MappingProxyType", "MCP_SERVER_CONFIG", "normalized_schema",
+]);
+
 function toGenerationToolFromToolPlan(
     toolPlan: ToolPlan,
     tool: GeneratorRequest["tools"][number],
     warnings: string[],
-    fallbackAuth: GenerationPlan["auth"]
+    fallbackAuth: GenerationPlan["auth"],
+    reservedArgs: ReadonlySet<string>
 ): GenerationTool {
-    const seenArgs = new Set<string>();
+    const seenArgs = new Set<string>(reservedArgs);
     const visibleParameters = toolPlan.parameters.filter((parameter) =>
         !isParameterHidden(parameter, tool.parameters, warnings, toolPlan.toolName)
     );
@@ -238,7 +261,8 @@ function normalizeTool(
     toolIndex: number,
     warnings: string[],
     apiModel: ApiModel | undefined,
-    fallbackAuth: GenerationPlan["auth"]
+    fallbackAuth: GenerationPlan["auth"],
+    reservedArgs: ReadonlySet<string>
 ): GenerationTool {
     const canonicalOperation = getCanonicalOperation(apiModel, tool.endpointId);
     if (!apiModel || !canonicalOperation) {
@@ -266,19 +290,22 @@ function normalizeTool(
         }),
         tool,
         warnings,
-        fallbackAuth
+        fallbackAuth,
+        reservedArgs
     );
 }
 
 export function buildGenerationPlan(request: GeneratorRequest): GenerationPlan {
     const warnings: string[] = [];
     const seenToolNames = new Set<string>();
-    const seenFunctionNames = new Set<string>();
+    const isPython = request.exportConfig.language === "python";
+    const seenFunctionNames = new Set<string>(isPython ? PYTHON_RESERVED_FUNCTIONS : []);
+    const reservedArgs: ReadonlySet<string> = isPython ? PYTHON_RESERVED_ARGS : new Set();
     const auth = normalizeAuth(request.authConfig);
     const mcpServerAuth = normalizeMcpServerAuth(request.mcpServerAuthConfig);
 
     const tools = request.tools.map((tool, index) => {
-        const normalized = normalizeTool(tool, index, warnings, request.spec.apiModel, auth);
+        const normalized = normalizeTool(tool, index, warnings, request.spec.apiModel, auth, reservedArgs);
         const uniqueDisplayName = makeUniqueDisplayName(
             normalized.displayName,
             seenToolNames,
