@@ -362,7 +362,7 @@ function renderPythonCompactRegistryEntry(tool: GenerationTool): string {
         `        "path": ${JSON.stringify(tool.path)}`,
         `        "summary": ${toPythonStringLiteral((tool.title || tool.description || "").slice(0, 120))}`,
         `        "description": ${toPythonStringLiteral(tool.description)}`,
-        `        "tags": []`,
+        `        "tags": ${toPythonJsonLiteral(tool.tags ?? [])}`,
         `        "parameters": [\n${parameterDescriptors ? `${parameterDescriptors}\n        ` : ""}]`,
         `        "body_content_kind": ${tool.requestBody ? JSON.stringify(tool.requestBody.contentKind) : "None"}`,
         `        "body_param_names": ${toPythonJsonLiteral(bodyParamNames)}`,

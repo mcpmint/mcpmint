@@ -253,6 +253,7 @@ function toGenerationToolFromToolPlan(
         title: toolPlan.title,
         outputSchema: toolPlan.outputSchema,
         annotations: toolPlan.annotations,
+        tags: toolPlan.tags,
     };
 }
 

@@ -254,3 +254,29 @@ test("Swagger 2 collectionFormat controls array serialization", async () => {
         pipes: ["pipeDelimited", false],
     });
 });
+
+test("compact mode keeps operation tags and accepts cookie parameters", async () => {
+    const request = await requestFor({
+        openapi: "3.0.3",
+        info: { title: "Pets", version: "1" },
+        servers: [{ url: "https://api.example.com" }],
+        paths: {
+            "/pets": {
+                get: {
+                    operationId: "listPets",
+                    tags: ["pets"],
+                    parameters: [{ name: "session", in: "cookie", required: true, schema: { type: "string" } }],
+                    responses: { "200": { description: "ok" } },
+                },
+            },
+        },
+    }, { compactMode: true });
+
+    const { project: node } = prepareGeneratedProject(request);
+    const server = node.files.get("src/mcp/server.ts")!;
+    assert.match(server, /tags: \["pets"\] as string\[\]/);
+    assert.match(server, /cookie: z\.record\(z\.unknown\(\)\)\.optional\(\)/);
+
+    const { project: python } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    assert.match(python.files.get("src/server.py")!, /"tags": \["pets"\]/);
+});

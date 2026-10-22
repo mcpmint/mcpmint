@@ -826,7 +826,7 @@ function renderCompactRegistryEntry(tool: GenerationTool, index: number): string
         `    path: ${JSON.stringify(tool.path)}`,
         `    summary: ${toJsStringLiteral((tool.title || tool.description || "").slice(0, 120))}`,
         `    description: ${toJsStringLiteral(tool.description)}`,
-        `    tags: [] as string[]`,
+        `    tags: ${JSON.stringify(tool.tags ?? [])} as string[]`,
         `    parameters: [\n${parameterDescriptors}\n    ]`,
         `    bodyContentKind: ${JSON.stringify(tool.requestBody?.contentKind ?? null)}`,
         `    bodyParamNames: ${JSON.stringify(bodyParamNames)}`,
@@ -898,14 +898,14 @@ function decodeCursor(cursor: string | undefined): number {
 // keys — so the model cannot smuggle in unknown parameters.
 function toOperationArgs(
   operation: MetaOperation,
-  parameters: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } | undefined
+  parameters: { path?: unknown; query?: unknown; header?: unknown; cookie?: unknown; body?: unknown } | undefined
 ): Record<string, unknown> {
   const args: Record<string, unknown> = {};
   const buckets: Record<string, Record<string, unknown>> = {
     path: asObject(parameters?.path),
     query: asObject(parameters?.query),
     header: asObject(parameters?.header),
-    cookie: asObject((parameters as Record<string, unknown> | undefined)?.cookie),
+    cookie: asObject(parameters?.cookie),
   };
 
   for (const parameter of operation.parameters) {
@@ -1069,6 +1069,7 @@ export function createServer() {
           path: z.record(z.unknown()).optional(),
           query: z.record(z.unknown()).optional(),
           header: z.record(z.unknown()).optional(),
+          cookie: z.record(z.unknown()).optional(),
           body: z.unknown().optional(),
         }).optional().describe("Inputs by location, plus a body key for the request body."),
       },
@@ -1080,7 +1081,7 @@ export function createServer() {
         openWorldHint: true,
       },
     },
-    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; body?: unknown } }, extra) => {
+    async (args: { endpointId: string; parameters?: { path?: unknown; query?: unknown; header?: unknown; cookie?: unknown; body?: unknown } }, extra) => {
       const respond = (payload: Record<string, unknown>, isError: boolean) => ({
         content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
         structuredContent: payload,

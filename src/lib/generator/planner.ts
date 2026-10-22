@@ -454,6 +454,7 @@ export function planToolFromOperation(
             || apiModel.baseUrls[0],
         toolName,
         title,
+        tags: operation.tags ?? [],
         inputSchema: buildInputSchema(parameters),
         outputSchema: deriveOutputSchema(operation),
         annotations: deriveToolAnnotations(operation.method, title),
