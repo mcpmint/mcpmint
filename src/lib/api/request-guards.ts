@@ -21,7 +21,8 @@ interface RateWindow {
 }
 
 const memoryBuckets = new Map<string, RateWindow>();
-
+const UNKNOWN_CLIENT_LIMIT_FACTOR = 10;
+let warnedUnknownClient = false;
 
 /** Minimal header/IP surface used by getClientIp (NextRequest-compatible). */
 export interface ClientIpSource {
@@ -172,7 +173,16 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
     const ip = getClientIp(request);
     const key = `${route}:${ip}`;
-    const maxRequests = RATE_LIMIT_MAX_REQUESTS;
+    // Without a trusted client IP, all clients share one bucket. Warn once, and
+    // give that bucket more room so a few users cannot block everyone.
+    let maxRequests = RATE_LIMIT_MAX_REQUESTS;
+    if (ip === "unknown") {
+        maxRequests *= UNKNOWN_CLIENT_LIMIT_FACTOR;
+        if (!warnedUnknownClient) {
+            warnedUnknownClient = true;
+            console.warn("mcpmint: rate limiting cannot identify clients. Behind a proxy, set MCPMINT_TRUST_X_FORWARDED_FOR=1 or MCPMINT_TRUST_X_REAL_IP=1.");
+        }
+    }
 
     const remote = await upstashRateLimited(key, maxRequests);
     const result = remote ?? memoryRateLimited(key, maxRequests);

@@ -109,3 +109,15 @@ test("a Redis command error falls back to the memory limit", async () => {
         globalThis.fetch = previous.fetch;
     }
 });
+
+test("clients without a trusted IP share a larger bucket", async () => {
+    const warn = console.warn;
+    const warnings: unknown[] = [];
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+        assert.equal(await countAllowed(fakeRequest({}), "unknown-client", 250), 200);
+        assert.equal(warnings.length, 1);
+    } finally {
+        console.warn = warn;
+    }
+});
