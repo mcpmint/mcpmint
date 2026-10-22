@@ -482,7 +482,20 @@ export const useProjectStore = create<ProjectState>()(
                     return false;
                 }
 
-                const update = upsertProjectHistory(state.savedProjects, project, 50);
+                // The write is async. Read the state again, so a project opened
+                // meanwhile keeps its own id and history is not rolled back.
+                const current = get();
+                const update = upsertProjectHistory(current.savedProjects, project, 50);
+                set({
+                    savedProjects: update.projects,
+                    ...(current.spec === snapshot.spec ? {
+                        activeProjectId: project.id,
+                        projectName,
+                        autosaveStatus: "saved" as const,
+                        lastSavedAt: savedAt,
+                        error: null,
+                    } : {}),
+                });
                 for (const evicted of update.evicted) {
                     try {
                         await removeStored(projectStorageKey(evicted.id));
@@ -490,14 +503,6 @@ export const useProjectStore = create<ProjectState>()(
                         console.warn("Failed to remove evicted project data:", e);
                     }
                 }
-                set({
-                    savedProjects: update.projects,
-                    activeProjectId: project.id,
-                    projectName,
-                    autosaveStatus: "saved",
-                    lastSavedAt: savedAt,
-                    error: null,
-                });
                 return true;
             },
 
