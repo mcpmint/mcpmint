@@ -1,4 +1,4 @@
-import { ZipArchive } from "archiver";
+import { strToU8, zipSync } from "fflate";
 import type { GeneratedProject } from "./types.ts";
 
 // Defense-in-depth against Zip Slip / traversal (finding M1/R7). The caller
@@ -6,8 +6,8 @@ import type { GeneratedProject } from "./types.ts";
 // validation already restricts to a safe charset. We sanitize again here so
 // the archive layer is safe regardless of how it is invoked: strip path
 // separators and ".." segments, and fall back to a constant if nothing safe
-// remains.
-function sanitizeRootFolder(rootFolder: string): string {
+// remains. The same value is safe for a Content-Disposition filename.
+export function sanitizeRootFolder(rootFolder: string): string {
     const cleaned = rootFolder
         .replace(/[\\/]+/g, "-")
         .replace(/\.\.+/g, "-")
@@ -18,27 +18,13 @@ function sanitizeRootFolder(rootFolder: string): string {
     return cleaned.length > 0 ? cleaned : "mcp-server";
 }
 
-export async function archiveGeneratedProject(
-    project: GeneratedProject,
-    rootFolder: string
-): Promise<Buffer> {
+// fflate is pure JavaScript, so the server route and the browser worker build
+// byte-identical archives with one implementation.
+export function zipGeneratedProject(project: GeneratedProject, rootFolder: string): Uint8Array {
     const safeRootFolder = sanitizeRootFolder(rootFolder);
-    const chunks: Uint8Array[] = [];
-    const archive = new ZipArchive({ zlib: { level: 9 } });
-
-    archive.on("data", (chunk) => chunks.push(chunk));
-
-    const archiveFinished = new Promise<void>((resolve, reject) => {
-        archive.on("end", resolve);
-        archive.on("error", reject);
-    });
-
+    const zipInput: Record<string, Uint8Array> = {};
     for (const [filePath, content] of project.files) {
-        archive.append(content, { name: `${safeRootFolder}/${filePath}` });
+        zipInput[`${safeRootFolder}/${filePath}`] = strToU8(content);
     }
-
-    await archive.finalize();
-    await archiveFinished;
-
-    return Buffer.concat(chunks);
+    return zipSync(zipInput, { level: 6 });
 }

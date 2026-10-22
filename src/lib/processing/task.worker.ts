@@ -134,7 +134,7 @@ self.onmessage = async ({ data }: MessageEvent<ProcessingRequest>) => {
       if (data.action === "preview")
         result = previewProjectInBrowser(data.payload);
       else {
-        const generated = await generateProjectInBrowser(data.payload);
+        const generated = generateProjectInBrowser(data.payload);
         // Blob storage is shared across threads; do not clone the full generated file map into the UI.
         result = { blob: generated.blob, filename: generated.filename };
       }

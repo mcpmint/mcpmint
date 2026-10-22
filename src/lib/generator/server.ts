@@ -1,4 +1,4 @@
-import { archiveGeneratedProject } from "./archive.ts";
+import { zipGeneratedProject } from "./archive.ts";
 import { prepareGeneratedProject } from "./core.ts";
 import type {
     GeneratedPreviewResponse,
@@ -20,12 +20,12 @@ export function createServerPreview(request: GeneratorRequest): GeneratedPreview
     };
 }
 
-export async function createServerArchive(request: GeneratorRequest): Promise<{
-    archive: Buffer;
+export function createServerArchive(request: GeneratorRequest): {
+    archive: Uint8Array;
     project: GeneratedProject;
     validation: ValidationResult;
-}> {
+} {
     const { project, validation } = prepareGeneratedProject(request);
-    const archive = await archiveGeneratedProject(project, request.serverConfig.name);
+    const archive = zipGeneratedProject(project, request.serverConfig.name);
     return { archive, project, validation };
 }

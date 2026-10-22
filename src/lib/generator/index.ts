@@ -1,4 +1,3 @@
-import { archiveGeneratedProject } from "./archive.ts";
 import { prepareGeneratedProject as prepareCoreProject } from "./core.ts";
 import type {
     GeneratedPreviewResponse,
@@ -31,28 +30,6 @@ export function createPreviewResponse(request: GeneratorRequest): GeneratedPrevi
         validation,
         verification,
     };
-}
-
-export async function createArchivedProject(request: GeneratorRequest): Promise<{
-    archive: Buffer;
-    project: GeneratedProject;
-    validation: ValidationResult;
-    verification?: VerificationReport;
-}> {
-    const { project, validation, verification } = prepareGeneratedProject(request);
-
-    if (verification?.status === "failed") {
-        throw new Error(
-            verification.checks
-                .filter((check) => check.status === "failed")
-                .map((check) => `${check.name}: ${check.details || "failed"}`)
-                .join("\n")
-        );
-    }
-
-    const archive = await archiveGeneratedProject(project, request.serverConfig.name);
-
-    return { archive, project, validation, verification };
 }
 
 export type {

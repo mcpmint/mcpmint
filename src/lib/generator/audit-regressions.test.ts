@@ -10,6 +10,8 @@ import { parseOpenAPIFromContent } from "../parsers/openapi.ts";
 import { buildPostmanApiModel } from "../api-model/postman.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "../../../cli/src/build-request.ts";
 import { prepareGeneratedProject } from "./core.ts";
+import { createServerArchive } from "./server.ts";
+import { unzipSync, strFromU8 } from "fflate";
 
 // Regression tests for the 2026-10-22 repository audit. Each test names the
 // failure it guards against.
@@ -340,4 +342,12 @@ ${source}
 print(is_bearer_authorized("Bearer s3cret", "s3cret"), is_bearer_authorized("Bearer é", "s3cret"), is_bearer_authorized("Bearer töken".encode("utf-8").decode("latin-1"), "töken"))
 `], { encoding: "utf8" });
     assert.equal(output.trim(), "True False True");
+});
+
+test("the server archive uses the shared fflate zip with a safe root folder", async () => {
+    const request = await requestFor(dotSegmentSpec);
+    const { archive, project } = createServerArchive(request);
+    const entries = unzipSync(archive);
+    assert.deepEqual(Object.keys(entries).sort(), [...project.files.keys()].map((name) => `${request.serverConfig.name}/${name}`).sort());
+    assert.equal(strFromU8(entries[`${request.serverConfig.name}/package.json`]), project.files.get("package.json"));
 });
