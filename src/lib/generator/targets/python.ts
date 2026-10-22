@@ -800,7 +800,9 @@ def is_bearer_authorized(authorization: str | None, token: str) -> bool:
     if not token or not authorization:
         return False
     # Constant-time comparison to avoid leaking the token via timing side channels.
-    return hmac.compare_digest(authorization, f"Bearer {token}")
+    # Compare bytes: compare_digest raises TypeError for non-ASCII str. Headers
+    # are decoded as latin-1, so encoding back with latin-1 gives the raw bytes.
+    return hmac.compare_digest(authorization.encode("latin-1"), f"Bearer {token}".encode("utf-8"))
 
 
 def _header(scope: Scope, name: str) -> str | None:

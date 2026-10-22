@@ -327,3 +327,17 @@ test("server variables with special characters are replaced literally", async ()
     }), "openapi.json");
     assert.equal(parsed.baseUrl, "https://eu.example.com/$&v1");
 });
+
+test("Python bearer check rejects non-ASCII headers instead of raising", async () => {
+    const request = await requestFor(dotSegmentSpec, { transport: "http", mcpServerAuthType: "bearer" });
+    const { project } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    const access = project.files.get("src/access.py")!;
+    const start = access.indexOf("def is_bearer_authorized");
+    const source = access.slice(start).split("\n\n\n")[0];
+    const output = execFileSync("python3", ["-c", `
+import hmac
+${source}
+print(is_bearer_authorized("Bearer s3cret", "s3cret"), is_bearer_authorized("Bearer é", "s3cret"), is_bearer_authorized("Bearer töken".encode("utf-8").decode("latin-1"), "töken"))
+`], { encoding: "utf8" });
+    assert.equal(output.trim(), "True False True");
+});
