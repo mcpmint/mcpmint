@@ -280,3 +280,26 @@ test("compact mode keeps operation tags and accepts cookie parameters", async ()
     const { project: python } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
     assert.match(python.files.get("src/server.py")!, /"tags": \["pets"\]/);
 });
+
+test("Python servers parse +json responses as JSON", async () => {
+    const request = await requestFor(dotSegmentSpec);
+    const { project } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    const client = project.files.get("src/api_client.py")!;
+    const start = client.indexOf("def response_to_tool_result");
+    const source = client.slice(start).split("\n\n\n")[0];
+    const output = execFileSync("python3", ["-c", `
+import json
+class ToolError(Exception): pass
+class FakeResponse:
+    status_code = 200
+    def __init__(self, content_type, body):
+        self.headers = {"content-type": content_type}
+        self.text = body
+    def json(self):
+        return json.loads(self.text)
+${source.replace("httpx.Response", "object")}
+print(json.dumps(response_to_tool_result(FakeResponse("application/vnd.api+json; charset=utf-8", '{"data": {"id": "1"}}'))))
+print(json.dumps(response_to_tool_result(FakeResponse("text/plain", "hi"))))
+`], { encoding: "utf8" });
+    assert.equal(output.trim(), '{"data": {"id": "1"}}\n{"text": "hi"}');
+});

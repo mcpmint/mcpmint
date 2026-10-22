@@ -1008,7 +1008,8 @@ def response_to_tool_result(response: httpx.Response) -> dict:
     # would fail the tool call opaquely.
     if response.status_code >= 400:
         raise ToolError(f"Upstream returned HTTP {response.status_code}.")
-    if "application/json" in response.headers.get("content-type", ""):
+    media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+    if media_type == "application/json" or media_type.endswith("+json"):
         return response.json()
     return {"text": response.text}
 `;
