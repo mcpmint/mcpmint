@@ -228,3 +228,29 @@ test("an optional JSON body with required fields stays one optional body argumen
     assert.equal(tool.requestBody?.contentKind, "rawJsonObject");
     assert.deepEqual(tool.params.map((param) => [param.argName, param.required]), [["body", false]]);
 });
+
+test("Swagger 2 collectionFormat controls array serialization", async () => {
+    const parameter = (name: string, collectionFormat?: string) => ({ name, in: "query", type: "array", items: { type: "string" }, ...(collectionFormat ? { collectionFormat } : {}) });
+    const parsed = await parseOpenAPIFromContent(JSON.stringify({
+        swagger: "2.0",
+        info: { title: "Tags", version: "1" },
+        host: "api.example.com",
+        paths: {
+            "/items": {
+                get: {
+                    operationId: "list",
+                    parameters: [parameter("byDefault"), parameter("csv", "csv"), parameter("multi", "multi"), parameter("ssv", "ssv"), parameter("pipes", "pipes")],
+                    responses: { "200": { description: "ok" } },
+                },
+            },
+        },
+    }), "swagger.json");
+    const serialization = Object.fromEntries(parsed.apiModel!.operations[0].parameters.map((item) => [item.name, [item.style, item.explode]]));
+    assert.deepEqual(serialization, {
+        byDefault: ["form", false],
+        csv: ["form", false],
+        multi: ["form", true],
+        ssv: ["spaceDelimited", false],
+        pipes: ["pipeDelimited", false],
+    });
+});

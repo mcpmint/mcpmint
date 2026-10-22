@@ -169,6 +169,18 @@ function schemaFromSwaggerParameter(parameter: Record<string, unknown>): Record<
     });
 }
 
+// Swagger 2.0 arrays use collectionFormat (default "csv") instead of style and
+// explode. Map it to the OpenAPI 3 serialization that sends the same value.
+function swaggerArraySerialization(parameter: Record<string, unknown>, location: string): { style: string; explode: boolean } | undefined {
+    if (parameter.schema || parameter.type !== "array") return undefined;
+    const format = asString(parameter.collectionFormat) || "csv";
+    if (format === "multi" && location === "query") return { style: "form", explode: true };
+    if (format === "ssv" && location === "query") return { style: "spaceDelimited", explode: false };
+    if (format === "pipes" && location === "query") return { style: "pipeDelimited", explode: false };
+    if (format === "csv") return { style: location === "query" || location === "cookie" ? "form" : "simple", explode: false };
+    return undefined;
+}
+
 function normalizeParameter(value: unknown, level: "path" | "operation"): ApiParameter | undefined {
     const parameter = asRecord(value);
     const name = asString(parameter?.name);
@@ -181,6 +193,7 @@ function normalizeParameter(value: unknown, level: "path" | "operation"): ApiPar
     const schema = asRecord(parameter.schema) || schemaFromSwaggerParameter(parameter);
 
     const content = normalizeMediaTypes(parameter.content);
+    const swaggerSerialization = swaggerArraySerialization(parameter, String(location));
 
     return {
         name,
@@ -190,8 +203,8 @@ function normalizeParameter(value: unknown, level: "path" | "operation"): ApiPar
         description: asString(parameter.description),
         deprecated: asBoolean(parameter.deprecated),
         allowEmptyValue: asBoolean(parameter.allowEmptyValue),
-        style: asString(parameter.style),
-        explode: asBoolean(parameter.explode),
+        style: asString(parameter.style) ?? swaggerSerialization?.style,
+        explode: asBoolean(parameter.explode) ?? swaggerSerialization?.explode,
         allowReserved: asBoolean(parameter.allowReserved),
         content: content.length > 0 ? content : undefined,
         example: parameter.example,
