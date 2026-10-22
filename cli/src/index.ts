@@ -8,7 +8,7 @@ import { basename, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { parseOpenAPIFromContent } from "../../src/lib/parsers/openapi.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "./build-request.ts";
-import { generateProject, generateToDisk } from "./generate.ts";
+import { generateProject, writeProjectFiles } from "./generate.ts";
 import { inspectSpec } from "./inspect.ts";
 import { analyzeCapabilities, type SelectionPreset } from "../../src/lib/capabilities.ts";
 import { createRequestAttestation, formatScan, scanRequest, testRequest } from "./workflows.ts";
@@ -226,18 +226,35 @@ async function runGenerate(specPath: string, rawArgs: string[]) {
 
     let result;
     try {
-        if (outputFormat === "dir") result = generateToDisk(request, outDir, verify, replaceExisting);
-        else {
-            result = generateProject(request, verify);
-            const archive = createTarGzip(result.files);
-            if (values.stdout) process.stdout.write(archive);
-            else writeFileSync(configuredOut ? outDir : `${outDir}.tar.gz`, archive);
-        }
+        result = generateProject(request, verify);
     } catch (error) {
         fail(error instanceof Error ? error.message : "generation failed");
     }
 
-    diagnostics.write(`\n  Generated ${result.fileCount} files to ${values.stdout ? "stdout" : outputFormat === "tar" ? (configuredOut ? outDir : `${outDir}.tar.gz`) : outDir}\n`);
+    // Check before writing, so a failed check never replaces working output.
+    if (result.verification) {
+        const { status, mode, checks } = result.verification;
+        diagnostics.write(`\n  Verification (${mode}): ${status}\n`);
+        for (const check of checks) {
+            const mark = check.status === "passed" ? "PASS" : check.status === "failed" ? "FAIL" : "skip";
+            diagnostics.write(`    [${mark}] ${check.name}${check.details ? ` — ${check.details}` : ""}\n`);
+        }
+        if (status === "failed") {
+            process.stderr.write(`\n  Generated output failed verification. Nothing was written.\n`);
+            process.exit(2);
+        }
+    }
+
+    const destination = values.stdout ? "stdout" : outputFormat === "tar" ? (configuredOut ? outDir : `${outDir}.tar.gz`) : outDir;
+    try {
+        if (outputFormat === "dir") writeProjectFiles(result.files, outDir, replaceExisting);
+        else if (values.stdout) process.stdout.write(createTarGzip(result.files));
+        else writeFileSync(destination, createTarGzip(result.files));
+    } catch (error) {
+        fail(error instanceof Error ? error.message : "could not write output");
+    }
+
+    diagnostics.write(`\n  Generated ${result.fileCount} files to ${destination}\n`);
     diagnostics.write(
         `  ${request.exportConfig.language} · ${request.serverConfig.transport} · ` +
             `${options.compactMode ? "compact (3 meta-tools)" : `${request.tools.length} tools`}\n`,
@@ -250,19 +267,6 @@ async function runGenerate(specPath: string, rawArgs: string[]) {
         }
         if (result.warnings.length > 10) {
             diagnostics.write(`    ... and ${result.warnings.length - 10} more\n`);
-        }
-    }
-
-    if (result.verification) {
-        const { status, mode, checks } = result.verification;
-        diagnostics.write(`\n  Verification (${mode}): ${status}\n`);
-        for (const check of checks) {
-            const mark = check.status === "passed" ? "PASS" : check.status === "failed" ? "FAIL" : "skip";
-            diagnostics.write(`    [${mark}] ${check.name}${check.details ? ` — ${check.details}` : ""}\n`);
-        }
-        if (status === "failed") {
-            process.stderr.write(`\n  Generated output failed verification.\n`);
-            process.exit(2);
         }
     }
 

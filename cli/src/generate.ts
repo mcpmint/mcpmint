@@ -10,11 +10,12 @@ import {
     mkdirSync,
     mkdtempSync,
     readdirSync,
+    readFileSync,
     renameSync,
     rmSync,
     writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import type { GeneratorRequest, VerificationReport } from "../../src/lib/generator/types.ts";
 import { buildGenerationPlan } from "../../src/lib/generator/normalize.ts";
 import { validateGenerationPlan } from "../../src/lib/generator/validate.ts";
@@ -43,51 +44,66 @@ export function generateProject(
     return { fileCount: project.files.size, files: project.files, warnings: plan.warnings, verification };
 }
 
-export function writeProjectAtomically(
+// The list of files the last run wrote. A forced run deletes only files on this
+// list that the new run no longer makes, so user files such as .env stay.
+const MANAGED_FILES_LIST = ".mcpmint-files";
+
+function isSafeRelativePath(filePath: string): boolean {
+    const normalized = normalize(filePath);
+    return filePath !== "" && normalized !== "." && !isAbsolute(normalized) && normalized !== ".." && !normalized.startsWith(`..${sep}`);
+}
+
+function readManagedFiles(outDir: string): string[] {
+    try {
+        return readFileSync(join(outDir, MANAGED_FILES_LIST), "utf8").split("\n").filter(isSafeRelativePath);
+    } catch {
+        return [];
+    }
+}
+
+function containsPath(parent: string, child: string): boolean {
+    const path = relative(parent, child);
+    return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+}
+
+export function writeProjectFiles(
     files: ReadonlyMap<string, string>,
     outDir: string,
     replaceExisting: boolean,
 ): void {
-    const parentDirectory = dirname(outDir);
+    const target = resolve(outDir);
+    if (containsPath(target, process.cwd())) {
+        throw new Error(`refusing to write into "${target}" because it contains the current directory. Choose a separate --out folder.`);
+    }
+    if (existsSync(target) && readdirSync(target).length > 0 && !replaceExisting) {
+        throw new Error(`output directory "${target}" is not empty`);
+    }
+
+    const parentDirectory = dirname(target);
     mkdirSync(parentDirectory, { recursive: true });
+    const previous = readManagedFiles(target);
+    const output = new Map(files);
+    output.set(MANAGED_FILES_LIST, `${[...files.keys()].sort().join("\n")}\n`);
 
-    if (existsSync(outDir) && readdirSync(outDir).length > 0 && !replaceExisting) {
-        throw new Error(`output directory "${outDir}" is not empty`);
-    }
-
-    const stagingDirectory = mkdtempSync(join(parentDirectory, `.${basename(outDir)}-mcpmint-`));
-    const backupDirectory = `${stagingDirectory}.previous`;
-    let movedExisting = false;
-
+    // Write everything to a staging folder first, so a write error leaves the
+    // existing output untouched. Then move each file into place.
+    const stagingDirectory = mkdtempSync(join(parentDirectory, `.${basename(target)}-mcpmint-`));
     try {
-        for (const [filePath, content] of files) {
-            const target = join(stagingDirectory, filePath);
-            mkdirSync(dirname(target), { recursive: true });
-            writeFileSync(target, content);
+        for (const [filePath, content] of output) {
+            if (!isSafeRelativePath(filePath)) throw new Error(`unsafe generated file path: ${filePath}`);
+            const staged = join(stagingDirectory, filePath);
+            mkdirSync(dirname(staged), { recursive: true });
+            writeFileSync(staged, content);
         }
-
-        if (existsSync(outDir)) {
-            renameSync(outDir, backupDirectory);
-            movedExisting = true;
+        for (const filePath of output.keys()) {
+            const destination = join(target, filePath);
+            mkdirSync(dirname(destination), { recursive: true });
+            renameSync(join(stagingDirectory, filePath), destination);
         }
-        renameSync(stagingDirectory, outDir);
-        if (movedExisting) rmSync(backupDirectory, { recursive: true, force: true });
-    } catch (error) {
+        for (const filePath of previous) {
+            if (!output.has(filePath)) rmSync(join(target, filePath), { force: true });
+        }
+    } finally {
         rmSync(stagingDirectory, { recursive: true, force: true });
-        if (movedExisting && !existsSync(outDir) && existsSync(backupDirectory)) {
-            renameSync(backupDirectory, outDir);
-        }
-        throw error;
     }
-}
-
-export function generateToDisk(
-    request: GeneratorRequest,
-    outDir: string,
-    verify: "off" | "fast" | "full",
-    replaceExisting = false,
-): GenerateResult {
-    const result = generateProject(request, verify);
-    writeProjectAtomically(result.files, outDir, replaceExisting);
-    return result;
 }
