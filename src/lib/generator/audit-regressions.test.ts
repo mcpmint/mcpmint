@@ -204,3 +204,27 @@ test("relative servers in file imports use the base URL the user enters", async 
     const { plan } = prepareGeneratedProject({ ...request, spec: { ...request.spec, baseUrl: "https://petstore3.swagger.io" } });
     assert.equal(plan.tools[0].baseUrl, "https://petstore3.swagger.io/api/v3");
 });
+
+test("an optional JSON body with required fields stays one optional body argument", async () => {
+    const request = await requestFor({
+        openapi: "3.0.3",
+        info: { title: "Search", version: "1" },
+        servers: [{ url: "https://api.example.com" }],
+        paths: {
+            "/search": {
+                post: {
+                    operationId: "search",
+                    requestBody: {
+                        required: false,
+                        content: { "application/json": { schema: { type: "object", required: ["term"], properties: { term: { type: "string" } } } } },
+                    },
+                    responses: { "200": { description: "ok" } },
+                },
+            },
+        },
+    });
+    const { plan } = prepareGeneratedProject(request);
+    const tool = plan.tools[0];
+    assert.equal(tool.requestBody?.contentKind, "rawJsonObject");
+    assert.deepEqual(tool.params.map((param) => [param.argName, param.required]), [["body", false]]);
+});
