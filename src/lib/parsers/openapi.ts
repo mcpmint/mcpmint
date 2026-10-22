@@ -60,38 +60,4 @@ export async function parseOpenAPIFromContent(content: string, filename: string,
     }
 }
 
-// Parse from URL.
-//
-// The raw fetch happens SERVER-SIDE via the /api/fetch-spec proxy (which is
-// SSRF-hardened) to avoid browser CORS failures. Once we have the text we run
-// it through the SAME client-side pipeline as the file/paste tabs, so OpenAPI,
-// Swagger AND Postman collections all work identically regardless of source.
-export async function parseOpenAPIFromURL(url: string): Promise<ParsedSpec & { format?: string }> {
-    let content: string;
-    try {
-        const response = await fetch("/api/fetch-spec", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url }),
-        });
-
-        const data = (await response.json().catch(() => null)) as
-            | { content?: string; error?: string }
-            | null;
-
-        if (!response.ok || !data || typeof data.content !== "string") {
-            const message = data?.error || `Failed to fetch spec (HTTP ${response.status})`;
-            throw new Error(message);
-        }
-
-        content = data.content;
-    } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to fetch spec";
-        throw new Error(`Failed to fetch from ${url}: ${message}`);
-    }
-
-    // Reuse the shared detect-and-parse pipeline (handles Postman vs OpenAPI).
-    return parseOpenAPIFromContent(content, url);
-}
-
 export * from "./validation.ts";
