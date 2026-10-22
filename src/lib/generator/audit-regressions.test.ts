@@ -317,3 +317,13 @@ test("generated packages expose the command that server.json launches", async ()
     assert.match(python.files.get("pyproject.toml")!, new RegExp(`\\[project\\.scripts\\]\\n"${request.serverConfig.name}" = "server:main"`));
     assert.match(python.files.get("src/server.py")!, /def main\(\) -> None:\n {4}mcp\.run\(transport="stdio"\)\n\n\nif __name__ == "__main__":\n {4}main\(\)/);
 });
+
+test("server variables with special characters are replaced literally", async () => {
+    const parsed = await parseOpenAPIFromContent(JSON.stringify({
+        openapi: "3.0.3",
+        info: { title: "Vars", version: "1" },
+        servers: [{ url: "https://{region(}.example.com/{base}", variables: { "region(": { default: "eu" }, base: { default: "$&v1" } } }],
+        paths: { "/items": { get: { operationId: "list", responses: { "200": { description: "ok" } } } } },
+    }), "openapi.json");
+    assert.equal(parsed.baseUrl, "https://eu.example.com/$&v1");
+});

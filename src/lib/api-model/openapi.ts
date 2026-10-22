@@ -57,8 +57,10 @@ function removeUndefined<T extends Record<string, unknown>>(value: T): T {
 function resolveServerUrl(server: ApiServer): string {
     if (!server.variables) return server.url;
 
+    // split/join, not a RegExp: names such as "port(" and defaults such as "$&"
+    // must be used literally.
     return Object.entries(server.variables).reduce((url, [name, variable]) =>
-        url.replace(new RegExp(`\\{${name}\\}`, "g"), variable.default),
+        url.split(`{${name}}`).join(variable.default),
         server.url
     );
 }
