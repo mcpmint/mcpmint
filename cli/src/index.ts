@@ -4,7 +4,7 @@
 
 import { readFileSync, existsSync, readdirSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { parseOpenAPIFromContent } from "../../src/lib/parsers/openapi.ts";
 import { buildGeneratorRequest, type BuildRequestOptions } from "./build-request.ts";
@@ -271,22 +271,43 @@ async function runGenerate(specPath: string, rawArgs: string[]) {
     }
 
     if (outputFormat === "dir") diagnostics.write(`\n  Next: cd ${outDir} && see README.md\n\n`);
-    if (values.watch) {
-        diagnostics.write(`\n  Watching ${resolve(specPath)} for changes…\n`);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        watch(resolve(specPath), () => {
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
-                const args = process.argv.slice(1).filter((argument) => argument !== "--watch");
-                if (!args.includes("--force")) args.push("--force");
-                const child = spawn(process.execPath, args, { stdio: "inherit" });
-                child.on("exit", (code) => {
-                    if (code === 0) diagnostics.write("  Regeneration complete.\n");
-                    else diagnostics.write(`  Regeneration failed with exit code ${code ?? "unknown"}.\n`);
-                });
-            }, 250);
+    if (values.watch) watchSpec(resolve(specPath), diagnostics);
+}
+
+// Editors often save by writing a new file and renaming it over the old one,
+// so watch the folder and filter by name. Run one regeneration at a time and
+// keep at most one pending run, so an older run never overwrites newer output.
+function watchSpec(specFile: string, diagnostics: NodeJS.WritableStream) {
+    diagnostics.write(`\n  Watching ${specFile} for changes…\n`);
+    const args = process.argv.slice(1).filter((argument) => argument !== "--watch");
+    if (!args.includes("--force")) args.push("--force");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let running = false;
+    let pending = false;
+
+    const regenerate = () => {
+        if (running) {
+            pending = true;
+            return;
+        }
+        running = true;
+        const child = spawn(process.execPath, args, { stdio: "inherit" });
+        child.on("exit", (code) => {
+            if (code === 0) diagnostics.write("  Regeneration complete.\n");
+            else diagnostics.write(`  Regeneration failed with exit code ${code ?? "unknown"}.\n`);
+            running = false;
+            if (pending) {
+                pending = false;
+                regenerate();
+            }
         });
-    }
+    };
+
+    watch(dirname(specFile), (_event, filename) => {
+        if (filename !== basename(specFile)) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(regenerate, 250);
+    });
 }
 
 async function runInspect(specPath: string) {
