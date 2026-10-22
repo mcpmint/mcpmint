@@ -97,8 +97,17 @@ function getSchemaType(schema?: Record<string, unknown>): string | undefined {
     return undefined;
 }
 
-function sampleSchema(schema: Record<string, unknown> | undefined, fallback: string, depth = 0): unknown {
-    if (!schema || depth > 20) return fallback;
+// Each tool gets a fixed sample budget. Nested arrays multiply by minItems, so
+// without a shared budget a 200-byte schema can expand to gigabytes.
+const SAMPLE_BUDGET_PER_TOOL = 2_000;
+
+interface SampleBudget {
+    remaining: number;
+}
+
+function sampleSchema(schema: Record<string, unknown> | undefined, fallback: string, budget: SampleBudget, depth = 0): unknown {
+    if (!schema || depth > 20 || budget.remaining <= 0) return fallback;
+    budget.remaining -= 1;
     if (schema.example !== undefined) return schema.example;
     if (schema.const !== undefined) return schema.const;
     if (schema.default !== undefined) return schema.default;
@@ -111,13 +120,14 @@ function sampleSchema(schema: Record<string, unknown> | undefined, fallback: str
     if (schema.format === "date") return "2026-01-01";
     if (schema.format === "date-time") return "2026-01-01T00:00:00Z";
     if (type === "array") {
-        const length = Math.min(100, Math.max(1, typeof schema.minItems === "number" ? schema.minItems : 2));
-        return Array.from({ length }, (_, index) => sampleSchema(schema.items as Record<string, unknown>, index ? "beta" : "alpha", depth + 1));
+        const wanted = Math.min(100, Math.max(1, typeof schema.minItems === "number" ? schema.minItems : 2));
+        const length = Math.max(1, Math.min(wanted, budget.remaining));
+        return Array.from({ length }, (_, index) => sampleSchema(schema.items as Record<string, unknown>, index ? "beta" : "alpha", budget, depth + 1));
     }
     if (type === "object" || schema.properties) {
         const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
         if (!properties) return schema.additionalProperties === false ? {} : { status: "open", owner: "team" };
-        return Object.fromEntries(Object.entries(properties).map(([name, child]) => [name, sampleSchema(child, `${name}-value`, depth + 1)]));
+        return Object.fromEntries(Object.entries(properties).map(([name, child]) => [name, sampleSchema(child, `${name}-value`, budget, depth + 1)]));
     }
     if (type === "integer" || type === "number") {
         let value = typeof schema.minimum === "number" ? schema.minimum : 42;
@@ -131,15 +141,17 @@ function sampleSchema(schema: Record<string, unknown> | undefined, fallback: str
     let value = fallback;
     if (typeof schema.minLength === "number") value = value.padEnd(Math.min(10_000, schema.minLength), "x");
     if (typeof schema.maxLength === "number") value = value.slice(0, schema.maxLength);
+    budget.remaining -= Math.floor(value.length / 64);
     return value;
 }
 
-export function getTestSampleValue(param: GenerationTool["params"][number]): unknown {
-    return sampleSchema(param.schema, `${param.argName}-value`);
+function getTestSampleValue(param: GenerationTool["params"][number], budget: SampleBudget): unknown {
+    return sampleSchema(param.schema, `${param.argName}-value`, budget);
 }
 
 export function getTestArgs(tool: GenerationTool): Record<string, unknown> {
-    return Object.fromEntries(tool.params.map((param) => [param.argName, getTestSampleValue(param)]));
+    const budget: SampleBudget = { remaining: SAMPLE_BUDGET_PER_TOOL };
+    return Object.fromEntries(tool.params.map((param) => [param.argName, getTestSampleValue(param, budget)]));
 }
 
 export function getExpectedJsonBody(tool: GenerationTool, args: Record<string, unknown>): unknown {
