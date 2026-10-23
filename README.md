@@ -6,6 +6,8 @@
 
 Generate MCP servers in your browser from OpenAPI and Postman specs. File/paste imports and browser generation stay on your device by default, and a token meter keeps servers lean. Free and open source.
 
+**[Try it live at mcpmint.vercel.app →](https://mcpmint.vercel.app)**
+
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-4.0-38B2AC?style=flat-square&logo=tailwind-css)](https://tailwindcss.com/)
