@@ -17,7 +17,7 @@ function components(plan: GenerationPlan): Component[] {
     return [
       { type: "library", name: "@modelcontextprotocol/sdk", version: NODE_MCP_SDK_VERSION, purl: `pkg:npm/%40modelcontextprotocol/sdk@${NODE_MCP_SDK_VERSION}`, scope: "required" },
       { type: "library", name: "dotenv", version: "16.4.7", purl: "pkg:npm/dotenv@16.4.7", scope: "required" },
-      { type: "library", name: "zod", version: "3.25.76", purl: "pkg:npm/zod@3.25.76", scope: "required" },
+      { type: "library", name: "zod", version: "4.6.7", purl: "pkg:npm/zod@4.6.7", scope: "required" },
       { type: "library", name: "@types/node", version: "20.19.43", purl: "pkg:npm/%40types/node@20.19.43", scope: "optional" },
       { type: "library", name: "tsx", version: "4.23.15", purl: "pkg:npm/tsx@4.23.15", scope: "optional" },
       { type: "library", name: "typescript", version: "5.9.3", purl: "pkg:npm/typescript@5.9.3", scope: "optional" },
