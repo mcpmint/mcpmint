@@ -20,7 +20,11 @@ Generate MCP servers in your browser from OpenAPI and Postman specs. File/paste 
 
 [![Watch the MCPmint launch video — Your API. Minted for MCP.](docs/assets/mcpmint-launch-poster.png)](docs/assets/mcpmint-launch.mp4)
 
-[Watch the 55-second launch video](docs/assets/mcpmint-launch.mp4) to see spec import, endpoint selection, compact mode, Trust Scan, and server export.
+[Watch the 41-second launch video](docs/assets/mcpmint-launch.mp4). One real API spec with 271 endpoints goes in. Compact mode cuts the tool list from ~46.4K context tokens to ~372, then Trust Scan, export, and a test call show the server working.
+
+[![Watch the MCPmint demo walkthrough — compact mode at ~372 tokens.](docs/assets/mcpmint-demo-poster.png)](docs/assets/mcpmint-demo.mp4)
+
+[Watch the 56-second demo walkthrough](docs/assets/mcpmint-demo.mp4) for each step in the app: import, parse, select, compact mode, configure, Trust Scan, generate, download, and connect.
 
 ## ✨ Features
 
