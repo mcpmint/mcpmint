@@ -1067,10 +1067,10 @@ export function createServer() {
       inputSchema: {
         endpointId: z.string().describe("The endpoint id to invoke."),
         parameters: z.object({
-          path: z.record(z.unknown()).optional(),
-          query: z.record(z.unknown()).optional(),
-          header: z.record(z.unknown()).optional(),
-          cookie: z.record(z.unknown()).optional(),
+          path: z.record(z.string(), z.unknown()).optional(),
+          query: z.record(z.string(), z.unknown()).optional(),
+          header: z.record(z.string(), z.unknown()).optional(),
+          cookie: z.record(z.string(), z.unknown()).optional(),
           body: z.unknown().optional(),
         }).optional().describe("Inputs by location, plus a body key for the request body."),
       },
@@ -1501,7 +1501,7 @@ export function generateNodeProject(plan: GenerationPlan): GeneratedProject {
         dependencies: {
             "@modelcontextprotocol/sdk": NODE_MCP_SDK_VERSION,
             dotenv: "16.4.7",
-            zod: "3.25.76",
+            zod: "4.6.7",
         },
         devDependencies: {
             "@types/node": "20.19.43",

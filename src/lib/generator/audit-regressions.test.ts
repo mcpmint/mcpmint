@@ -277,7 +277,7 @@ test("compact mode keeps operation tags and accepts cookie parameters", async ()
     const { project: node } = prepareGeneratedProject(request);
     const server = node.files.get("src/mcp/server.ts")!;
     assert.match(server, /tags: \["pets"\] as string\[\]/);
-    assert.match(server, /cookie: z\.record\(z\.unknown\(\)\)\.optional\(\)/);
+    assert.match(server, /cookie: z\.record\(z\.string\(\), z\.unknown\(\)\)\.optional\(\)/);
 
     const { project: python } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
     assert.match(python.files.get("src/server.py")!, /"tags": \["pets"\]/);
