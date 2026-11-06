@@ -809,6 +809,18 @@ def is_bearer_authorized(authorization: str | None, token: str) -> bool:
     return hmac.compare_digest(authorization.encode("latin-1"), f"Bearer {token}".encode("utf-8"))
 
 
+def cors_headers(origin: str | None) -> list[tuple[bytes, bytes]]:
+    headers = [
+        (b"vary", b"Origin"),
+        (b"access-control-allow-methods", b"GET, POST, DELETE, OPTIONS"),
+        (b"access-control-allow-headers", b"Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID"),
+        (b"access-control-expose-headers", b"Mcp-Session-Id"),
+    ]
+    if origin:
+        headers.append((b"access-control-allow-origin", origin.encode("latin-1")))
+    return headers
+
+
 def _header(scope: Scope, name: str) -> str | None:
     target = name.lower().encode("latin-1")
     for raw_name, raw_value in scope.get("headers", []):
@@ -835,6 +847,13 @@ class McpAccessMiddleware:
             await self._reject(send, 403, "Origin not allowed")
             return
 
+        # A browser sends the CORS preflight without the Authorization header, so answer it
+        # before the bearer check. The Node target does the same.
+        if scope.get("method") == "OPTIONS":
+            await send({"type": "http.response.start", "status": 204, "headers": cors_headers(origin)})
+            await send({"type": "http.response.body", "body": b""})
+            return
+
         if MCP_SERVER_ACCESS_CONFIG["auth_type"] == "bearer":
             token = MCP_SERVER_ACCESS_CONFIG["auth_token"]
             if not token:
@@ -843,15 +862,21 @@ class McpAccessMiddleware:
 
             authorization = _header(scope, "authorization")
             if not is_bearer_authorized(authorization, token):
+                # CORS headers here too, or the browser hides the 401 from the client.
                 await self._reject(
                     send,
                     401,
                     "Missing or invalid bearer token",
-                    extra_headers=[(b"www-authenticate", b"Bearer")],
+                    extra_headers=[(b"www-authenticate", b"Bearer"), *cors_headers(origin)],
                 )
                 return
 
-        await self.app(scope, receive, send)
+        async def send_with_cors(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), *cors_headers(origin)]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
 
     async def _reject(
         self,

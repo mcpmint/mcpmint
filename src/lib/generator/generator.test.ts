@@ -996,6 +996,72 @@ test("python HTTP/SSE output enforces MCP server bearer auth and Origin validati
     assert.doesNotMatch(readmeFile, /does not enforce them because the emitted FastMCP server/);
 });
 
+test("python HTTP access middleware answers CORS preflight without a token and still guards requests", () => {
+    const preview = createPreviewResponse({
+        ...openApiBase,
+        mcpServerAuthConfig: { type: "bearer", allowedOrigins: ["https://client.example.com"] },
+        exportConfig: {
+            language: "python",
+            framework: "fastmcp",
+            packageManager: "npm",
+            features: { documentation: false, docker: false, tests: false, verification: false },
+        },
+    });
+    const tempDir = mkdtempSync(join(tmpdir(), "mcpmint-pyaccess-"));
+    try {
+        const files: Record<string, string> = {
+            "access.py": getFileContent(preview, "src/access.py"),
+            "config.py": "MCP_SERVER_ACCESS_CONFIG = {'allowed_origins': ['https://client.example.com'], 'auth_type': 'bearer', 'auth_token': 'secret'}\n",
+            "starlette/__init__.py": "",
+            "starlette/middleware.py": "class Middleware:\n    def __init__(self, cls, *args, **kwargs): self.cls = cls\n",
+            "starlette/types.py": "ASGIApp = Receive = Scope = Send = object\n",
+            "driver.py": `import asyncio, json
+from access import McpAccessMiddleware
+
+async def app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+async def call(method, headers):
+    sent = []
+    async def send(message): sent.append(message)
+    scope = {"type": "http", "method": method, "headers": [(k.encode(), v.encode()) for k, v in headers.items()]}
+    await McpAccessMiddleware(app)(scope, None, send)
+    start = sent[0]
+    return {"status": start["status"], "headers": {k.decode(): v.decode() for k, v in start["headers"]}}
+
+async def main():
+    origin = {"origin": "https://client.example.com"}
+    print(json.dumps([
+        await call("OPTIONS", {**origin, "access-control-request-headers": "authorization"}),
+        await call("POST", origin),
+        await call("POST", {**origin, "authorization": "Bearer secret"}),
+        await call("OPTIONS", {"origin": "https://evil.example"}),
+    ]))
+
+asyncio.run(main())
+`,
+        };
+        for (const [name, content] of Object.entries(files)) {
+            mkdirSync(dirname(join(tempDir, name)), { recursive: true });
+            writeFileSync(join(tempDir, name), content, "utf8");
+        }
+        const [preflight, unauthenticated, authenticated, foreign] = JSON.parse(
+            execFileSync("python3", ["driver.py"], { cwd: tempDir, encoding: "utf8" })
+        ) as Array<{ status: number; headers: Record<string, string> }>;
+        assert.equal(preflight.status, 204);
+        assert.equal(preflight.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.match(preflight.headers["access-control-allow-headers"], /Authorization/);
+        assert.equal(unauthenticated.status, 401);
+        assert.equal(unauthenticated.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.equal(authenticated.status, 200);
+        assert.equal(authenticated.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.equal(foreign.status, 403);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test("generated MCP access config fails closed for bearer auth and blank origin overrides", () => {
     const preview = createPreviewResponse({
         ...openApiBase,
