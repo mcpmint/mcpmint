@@ -793,7 +793,7 @@ test("python preview emits title, output_schema, structured content, and read-on
     // FastMCP's output_schema= (a JSON Schema dict, required carried through).
     assert.match(serverFile, /output_schema=\{"type": "object", "properties": \{"id": \{"type": "string"\}, "name": \{"type": "string"\}\}, "required": \["id"\]\}/);
     // Object schema is returned directly (no result-wrapping); FastMCP builds structured content from the dict.
-    assert.match(serverFile, /return getUser_operation\(userId\)/);
+    assert.match(serverFile, /return _operations\.getUser_operation\(userId\)/);
 });
 
 test("python preview wraps non-object output schemas under result", () => {
@@ -831,7 +831,7 @@ test("python preview wraps non-object output schemas under result", () => {
     const serverFile = getFileContent(preview, "src/server.py");
     // Array (non-object) schema is wrapped under `result` in both the schema and the return value.
     assert.match(serverFile, /output_schema=\{"type": "object", "properties": \{"result": \{"type": "array"[\s\S]*"required": \["result"\]\}/);
-    assert.match(serverFile, /return \{"result": getCount_operation\(\)\}/);
+    assert.match(serverFile, /return \{"result": _operations\.getCount_operation\(\)\}/);
 });
 
 test("python preview surfaces upstream failures as ToolError and emits a registry-ready pypi server.json", () => {

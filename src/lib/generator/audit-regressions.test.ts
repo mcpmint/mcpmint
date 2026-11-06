@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -350,4 +350,45 @@ test("the server archive uses the shared fflate zip with a safe root folder", as
     const entries = unzipSync(archive);
     assert.deepEqual(Object.keys(entries).sort(), [...project.files.keys()].map((name) => `${request.serverConfig.name}/${name}`).sort());
     assert.equal(strFromU8(entries[`${request.serverConfig.name}/package.json`]), project.files.get("package.json"));
+});
+
+test("a Python tool named like another tool's operation does not replace it", async () => {
+    const request = await requestFor({
+        openapi: "3.0.3",
+        info: { title: "Clash", version: "1" },
+        servers: [{ url: "https://api.example.com" }],
+        paths: {
+            "/items": { get: { operationId: "read", responses: { "200": { description: "ok" } } } },
+            "/items/{id}": {
+                delete: {
+                    operationId: "read_operation",
+                    parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+                    responses: { "204": { description: "gone" } },
+                },
+            },
+        },
+    }, { language: "python" });
+    const { project } = prepareGeneratedProject({ ...request, exportConfig: { ...request.exportConfig, language: "python", framework: "fastmcp" } });
+    const dir = mkdtempSync(join(tmpdir(), "mcpmint-clash-"));
+    try {
+        // Stand-ins for FastMCP and the generated helpers, so server.py imports and its tool functions run.
+        const stubs: Record<string, string> = {
+            "fastmcp/__init__.py": "class FastMCP:\n    def __init__(self, name): self.tools = []\n    def add_tool(self, tool): self.tools.append(tool)\n",
+            "fastmcp/tools.py": "class FunctionTool:\n    @staticmethod\n    def from_function(fn, **kwargs): return type('T', (), {'fn': fn})()\n",
+            "mcp/__init__.py": "",
+            "mcp/types.py": "def ToolAnnotations(**kwargs): return kwargs\n",
+            "validation.py": "def normalized_schema(schema): return schema\n",
+            "config.py": "MCP_SERVER_CONFIG = {'name': 'clash'}\n",
+            "operations.py": "def read_operation(): return {'method': 'GET'}\ndef read_operation_operation(id): return {'method': 'DELETE', 'id': id}\n",
+            "server.py": project.files.get("src/server.py")!,
+        };
+        for (const [name, content] of Object.entries(stubs)) {
+            mkdirSync(join(dir, name, ".."), { recursive: true });
+            writeFileSync(join(dir, name), content);
+        }
+        const output = execFileSync("python3", ["-c", "import json, server; print(json.dumps(server.read()))"], { cwd: dir, encoding: "utf8" });
+        assert.equal(output.trim(), '{"method": "GET"}');
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 });
