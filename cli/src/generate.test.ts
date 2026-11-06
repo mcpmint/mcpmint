@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { writeProjectFiles } from "./generate.ts";
@@ -72,6 +72,45 @@ test("a tampered managed-files list cannot delete files outside the output folde
         writeProjectFiles(new Map([["src/index.ts", "export {};"]]), outDir, true);
         assert.equal(readFileSync(join(root, "keep.txt"), "utf8"), "keep");
         assert.equal(existsSync(join(outDir, "README.md")), false);
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("forced regeneration refuses to write or delete through a linked folder", () => {
+    const root = mkdtempSync(join(tmpdir(), "mcpmint-link-test-"));
+    const outDir = join(root, "server");
+    const outside = join(root, "outside");
+
+    try {
+        mkdirSync(outside);
+        writeFileSync(join(outside, "index.ts"), "keep me");
+        writeFileSync(join(outside, "notes.txt"), "keep me too");
+        mkdirSync(outDir);
+        symlinkSync(outside, join(outDir, "src"));
+        writeFileSync(join(outDir, ".mcpmint-files"), "src/notes.txt\n");
+
+        assert.throws(
+            () => writeProjectFiles(new Map([["src/index.ts", "export {};"], ["README.md", "docs"]]), outDir, true),
+            /symbolic link/,
+        );
+        assert.equal(readFileSync(join(outside, "index.ts"), "utf8"), "keep me");
+        assert.equal(readFileSync(join(outside, "notes.txt"), "utf8"), "keep me too");
+        assert.equal(existsSync(join(outDir, "README.md")), false);
+    } finally {
+        rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("forced regeneration refuses an output folder that is a link", () => {
+    const root = mkdtempSync(join(tmpdir(), "mcpmint-link-out-test-"));
+    const outside = join(root, "outside");
+    try {
+        mkdirSync(outside);
+        writeFileSync(join(outside, "README.md"), "keep me");
+        symlinkSync(outside, join(root, "server"));
+        assert.throws(() => writeProjectFiles(new Map([["README.md", "docs"]]), join(root, "server"), true), /symbolic link/);
+        assert.equal(readFileSync(join(outside, "README.md"), "utf8"), "keep me");
     } finally {
         rmSync(root, { recursive: true, force: true });
     }
