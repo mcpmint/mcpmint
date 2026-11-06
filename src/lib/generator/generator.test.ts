@@ -2132,13 +2132,17 @@ import sys
 sys.path.insert(0, "src")
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 import server
 
 calls = json.loads(sys.argv[1])
 results = []
 for call in calls:
     handler = FastMCP.registered[call["tool"]]
-    results.append(handler(**call["args"]))
+    try:
+        results.append(handler(**call["args"]))
+    except ToolError as error:
+        results.append({"isError": True, **json.loads(str(error))})
 
 print(json.dumps({"registered": list(FastMCP.registered.keys()), "results": results}))
 `;
@@ -2254,16 +2258,19 @@ test("python compact invoke_api_endpoint safely dispatches known ids and rejects
     assert.equal(schemaResult.id, "GET-/items/{itemId}");
     assert.ok(schemaResult.parameters.some((parameter) => parameter.name === "item_id" && parameter.in === "path"));
 
-    // (a) Unknown id -> unknown_operation (closed registry, no HTTP call).
+    // (a) Unknown id -> unknown_operation (closed registry, no HTTP call), raised as a tool error.
+    assert.equal((unknown as { isError?: boolean }).isError, true);
     assert.equal((unknown as { ok: boolean }).ok, false);
     assert.equal((unknown as { error: { type: string } }).error.type, "unknown_operation");
 
-    // (b) Missing required arg -> validation_error BEFORE any dispatch.
+    // (b) Missing required arg -> validation_error BEFORE any dispatch, raised as a tool error.
+    assert.equal((invalid as { isError?: boolean }).isError, true);
     assert.equal((invalid as { ok: boolean }).ok, false);
     assert.equal((invalid as { error: { type: string } }).error.type, "validation_error");
 
     // (c) Valid known id -> dispatches through the stored operation, bounded envelope.
-    const okEnvelope = ok as { ok: boolean; endpointId: string; data: unknown };
+    const okEnvelope = ok as { ok: boolean; endpointId: string; data: unknown; isError?: boolean };
+    assert.equal(okEnvelope.isError, undefined);
     assert.equal(okEnvelope.ok, true);
     assert.equal(okEnvelope.endpointId, "GET-/items/{itemId}");
     assert.deepEqual(okEnvelope.data, { ok: true });

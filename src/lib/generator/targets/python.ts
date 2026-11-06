@@ -399,6 +399,7 @@ import sys
 from types import MappingProxyType
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from config import MCP_SERVER_CONFIG
 from operations import (
@@ -642,6 +643,12 @@ def get_api_endpoint_schema(endpointId: str) -> dict:
     }
 
 
+def _invoke_failure(envelope: dict) -> ToolError:
+    """A failed invoke is raised, so the client gets isError: true, as with the Node server.
+    The message is the same JSON envelope, so the model still sees the error type and details."""
+    return ToolError(json.dumps(envelope))
+
+
 @mcp.tool(
     name="invoke_api_endpoint",
     annotations=ToolAnnotations(
@@ -657,11 +664,11 @@ def invoke_api_endpoint(endpointId: str, parameters: dict | None = None) -> dict
     # (a) Closed registry - refuse unknown ids and make NO HTTP call.
     operation = META_OPERATIONS_BY_ID.get(endpointId)
     if operation is None:
-        return {
+        raise _invoke_failure({
             "ok": False,
             "endpointId": endpointId,
             "error": {"type": "unknown_operation", "message": f"Unknown endpoint id: {endpointId}"},
-        }
+        })
 
     # Map the {path, query, header, body} object onto flat operation args by the
     # registry's parameter descriptors (never arbitrary model keys).
@@ -670,11 +677,11 @@ def invoke_api_endpoint(endpointId: str, parameters: dict | None = None) -> dict
     # (b) Validate BEFORE any network I/O against the stored operation schema.
     issues = _validate_operation_args(operation, operation_args)
     if issues:
-        return {
+        raise _invoke_failure({
             "ok": False,
             "endpointId": operation["id"],
             "error": {"type": "validation_error", "message": "Arguments failed schema validation.", "details": issues},
-        }
+        })
 
     # (c) Dispatch through the stored per-operation request function, which builds
     # the request from the operation's method + path template and (d) applies auth
@@ -688,11 +695,11 @@ def invoke_api_endpoint(endpointId: str, parameters: dict | None = None) -> dict
             envelope["truncated"] = True
         return envelope
     except Exception as error:  # noqa: BLE001 - surface upstream failures in the envelope
-        return {
+        raise _invoke_failure({
             "ok": False,
             "endpointId": operation["id"],
             "error": {"type": "http_error", "message": str(error)},
-        }
+        }) from error
 
 
 def main() -> None:
