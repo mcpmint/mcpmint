@@ -793,7 +793,7 @@ test("python preview emits title, output_schema, structured content, and read-on
     // FastMCP's output_schema= (a JSON Schema dict, required carried through).
     assert.match(serverFile, /output_schema=\{"type": "object", "properties": \{"id": \{"type": "string"\}, "name": \{"type": "string"\}\}, "required": \["id"\]\}/);
     // Object schema is returned directly (no result-wrapping); FastMCP builds structured content from the dict.
-    assert.match(serverFile, /return getUser_operation\(userId\)/);
+    assert.match(serverFile, /return _operations\.getUser_operation\(userId\)/);
 });
 
 test("python preview wraps non-object output schemas under result", () => {
@@ -831,7 +831,7 @@ test("python preview wraps non-object output schemas under result", () => {
     const serverFile = getFileContent(preview, "src/server.py");
     // Array (non-object) schema is wrapped under `result` in both the schema and the return value.
     assert.match(serverFile, /output_schema=\{"type": "object", "properties": \{"result": \{"type": "array"[\s\S]*"required": \["result"\]\}/);
-    assert.match(serverFile, /return \{"result": getCount_operation\(\)\}/);
+    assert.match(serverFile, /return \{"result": _operations\.getCount_operation\(\)\}/);
 });
 
 test("python preview surfaces upstream failures as ToolError and emits a registry-ready pypi server.json", () => {
@@ -994,6 +994,72 @@ test("python HTTP/SSE output enforces MCP server bearer auth and Origin validati
     assert.match(readmeFile, /Generated Python FastMCP output enforces MCP server access in `src\/access\.py`/);
     assert.doesNotMatch(readmeFile, /Placeholder only; generated FastMCP code does not enforce it/);
     assert.doesNotMatch(readmeFile, /does not enforce them because the emitted FastMCP server/);
+});
+
+test("python HTTP access middleware answers CORS preflight without a token and still guards requests", () => {
+    const preview = createPreviewResponse({
+        ...openApiBase,
+        mcpServerAuthConfig: { type: "bearer", allowedOrigins: ["https://client.example.com"] },
+        exportConfig: {
+            language: "python",
+            framework: "fastmcp",
+            packageManager: "npm",
+            features: { documentation: false, docker: false, tests: false, verification: false },
+        },
+    });
+    const tempDir = mkdtempSync(join(tmpdir(), "mcpmint-pyaccess-"));
+    try {
+        const files: Record<string, string> = {
+            "access.py": getFileContent(preview, "src/access.py"),
+            "config.py": "MCP_SERVER_ACCESS_CONFIG = {'allowed_origins': ['https://client.example.com'], 'auth_type': 'bearer', 'auth_token': 'secret'}\n",
+            "starlette/__init__.py": "",
+            "starlette/middleware.py": "class Middleware:\n    def __init__(self, cls, *args, **kwargs): self.cls = cls\n",
+            "starlette/types.py": "ASGIApp = Receive = Scope = Send = object\n",
+            "driver.py": `import asyncio, json
+from access import McpAccessMiddleware
+
+async def app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+async def call(method, headers):
+    sent = []
+    async def send(message): sent.append(message)
+    scope = {"type": "http", "method": method, "headers": [(k.encode(), v.encode()) for k, v in headers.items()]}
+    await McpAccessMiddleware(app)(scope, None, send)
+    start = sent[0]
+    return {"status": start["status"], "headers": {k.decode(): v.decode() for k, v in start["headers"]}}
+
+async def main():
+    origin = {"origin": "https://client.example.com"}
+    print(json.dumps([
+        await call("OPTIONS", {**origin, "access-control-request-headers": "authorization"}),
+        await call("POST", origin),
+        await call("POST", {**origin, "authorization": "Bearer secret"}),
+        await call("OPTIONS", {"origin": "https://evil.example"}),
+    ]))
+
+asyncio.run(main())
+`,
+        };
+        for (const [name, content] of Object.entries(files)) {
+            mkdirSync(dirname(join(tempDir, name)), { recursive: true });
+            writeFileSync(join(tempDir, name), content, "utf8");
+        }
+        const [preflight, unauthenticated, authenticated, foreign] = JSON.parse(
+            execFileSync("python3", ["driver.py"], { cwd: tempDir, encoding: "utf8" })
+        ) as Array<{ status: number; headers: Record<string, string> }>;
+        assert.equal(preflight.status, 204);
+        assert.equal(preflight.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.match(preflight.headers["access-control-allow-headers"], /Authorization/);
+        assert.equal(unauthenticated.status, 401);
+        assert.equal(unauthenticated.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.equal(authenticated.status, 200);
+        assert.equal(authenticated.headers["access-control-allow-origin"], "https://client.example.com");
+        assert.equal(foreign.status, 403);
+    } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test("generated MCP access config fails closed for bearer auth and blank origin overrides", () => {
@@ -2132,13 +2198,17 @@ import sys
 sys.path.insert(0, "src")
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 import server
 
 calls = json.loads(sys.argv[1])
 results = []
 for call in calls:
     handler = FastMCP.registered[call["tool"]]
-    results.append(handler(**call["args"]))
+    try:
+        results.append(handler(**call["args"]))
+    except ToolError as error:
+        results.append({"isError": True, **json.loads(str(error))})
 
 print(json.dumps({"registered": list(FastMCP.registered.keys()), "results": results}))
 `;
@@ -2254,16 +2324,19 @@ test("python compact invoke_api_endpoint safely dispatches known ids and rejects
     assert.equal(schemaResult.id, "GET-/items/{itemId}");
     assert.ok(schemaResult.parameters.some((parameter) => parameter.name === "item_id" && parameter.in === "path"));
 
-    // (a) Unknown id -> unknown_operation (closed registry, no HTTP call).
+    // (a) Unknown id -> unknown_operation (closed registry, no HTTP call), raised as a tool error.
+    assert.equal((unknown as { isError?: boolean }).isError, true);
     assert.equal((unknown as { ok: boolean }).ok, false);
     assert.equal((unknown as { error: { type: string } }).error.type, "unknown_operation");
 
-    // (b) Missing required arg -> validation_error BEFORE any dispatch.
+    // (b) Missing required arg -> validation_error BEFORE any dispatch, raised as a tool error.
+    assert.equal((invalid as { isError?: boolean }).isError, true);
     assert.equal((invalid as { ok: boolean }).ok, false);
     assert.equal((invalid as { error: { type: string } }).error.type, "validation_error");
 
     // (c) Valid known id -> dispatches through the stored operation, bounded envelope.
-    const okEnvelope = ok as { ok: boolean; endpointId: string; data: unknown };
+    const okEnvelope = ok as { ok: boolean; endpointId: string; data: unknown; isError?: boolean };
+    assert.equal(okEnvelope.isError, undefined);
     assert.equal(okEnvelope.ok, true);
     assert.equal(okEnvelope.endpointId, "GET-/items/{itemId}");
     assert.deepEqual(okEnvelope.data, { ok: true });

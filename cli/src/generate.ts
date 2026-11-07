@@ -6,6 +6,7 @@
 
 import {
     existsSync,
+    lstatSync,
     mkdirSync,
     mkdtempSync,
     readdirSync,
@@ -52,6 +53,27 @@ function readManagedFiles(outDir: string): string[] {
     }
 }
 
+/**
+ * Throws if a folder between `root` and `path` is a symbolic link. Writing or
+ * deleting through such a link would change files outside the output folder.
+ * Folders that do not exist yet are created as real folders, so they are safe.
+ */
+function assertNoLinkedFolder(root: string, path: string): void {
+    let current = root;
+    for (const part of relative(root, path).split(sep).filter(Boolean)) {
+        current = join(current, part);
+        let isLink: boolean;
+        try {
+            isLink = lstatSync(current).isSymbolicLink();
+        } catch {
+            return;
+        }
+        if (isLink) {
+            throw new Error(`refusing to write through the symbolic link "${current}". Remove it or choose another --out folder.`);
+        }
+    }
+}
+
 function containsPath(parent: string, child: string): boolean {
     const path = relative(parent, child);
     return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
@@ -68,6 +90,13 @@ export function writeProjectFiles(
     }
     if (existsSync(target) && readdirSync(target).length > 0 && !replaceExisting) {
         throw new Error(`output directory "${target}" is not empty`);
+    }
+
+    // Check every folder first, so a refused run changes nothing. The output folder
+    // itself is included: a linked --out would send writes and deletes elsewhere.
+    assertNoLinkedFolder(dirname(target), target);
+    for (const filePath of [...files.keys(), ...readManagedFiles(target)]) {
+        if (isSafeRelativePath(filePath)) assertNoLinkedFolder(target, dirname(join(target, filePath)));
     }
 
     const parentDirectory = dirname(target);

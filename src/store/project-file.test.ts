@@ -91,3 +91,17 @@ test("rejects hostile nesting and size without recursing into unbounded input", 
     assert.throws(() => parseProjectFile(JSON.stringify(deep)), /deeply nested or complex/);
     assert.throws(() => parseProjectFile(' '.repeat(20 * 1024 * 1024 + 1)), /20 MB/);
 });
+
+test("keeps the base URL the user entered for a relative server", () => {
+    const file = structuredClone(fixture) as PortableProjectFile;
+    file.data.spec.apiModel!.baseUrls = ["/api/v3"];
+    file.data.spec.baseUrl = "https://service.example";
+    const parsed = parseProjectFile(serializeProjectFile(file));
+    assert.equal(parsed.data.spec.baseUrl, "https://service.example");
+    assert.equal(parseProjectFile(serializeProjectFile(parsed)).data.spec.baseUrl, "https://service.example");
+
+    const untouched = structuredClone(fixture) as PortableProjectFile;
+    untouched.data.spec.apiModel!.baseUrls = ["https://api.example.com/v1"];
+    (untouched.data.spec as { baseUrl?: string }).baseUrl = "";
+    assert.equal(parseProjectFile(JSON.stringify(untouched)).data.spec.baseUrl, "https://api.example.com/v1");
+});

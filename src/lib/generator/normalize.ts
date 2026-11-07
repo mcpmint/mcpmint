@@ -189,7 +189,7 @@ const PYTHON_RESERVED_ARGS: ReadonlySet<string> = new Set([
 const PYTHON_RESERVED_FUNCTIONS: ReadonlySet<string> = new Set([
     ...PYTHON_KEYWORDS,
     "mcp", "logging", "sys", "json", "base64", "binascii", "annotations", "FastMCP", "FunctionTool",
-    "ToolAnnotations", "MappingProxyType", "MCP_SERVER_CONFIG", "normalized_schema",
+    "ToolAnnotations", "MappingProxyType", "MCP_SERVER_CONFIG", "normalized_schema", "_operations",
 ]);
 
 function toGenerationToolFromToolPlan(

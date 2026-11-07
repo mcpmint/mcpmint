@@ -64,7 +64,9 @@ const metadataSchema = z.object({
   endpointCount: z.number().int().nonnegative().max(MAX_OPERATIONS), savedAt: z.number().finite().nonnegative(),
 });
 const snapshotSchema = z.object({
-  spec: z.object({ apiModel: apiModelSchema }),
+  // baseUrl is what the user typed in the editor. It is kept because a spec with a relative server
+  // (for example "/api/v3") cannot be exported without it.
+  spec: z.object({ apiModel: apiModelSchema, baseUrl: z.string().max(4000).optional() }),
   specSource: z.string().max(4000), specFormat: z.enum(["openapi", "postman"]),
   tools: z.array(toolSchema.extend({ parameters: toolSchema.shape.parameters, bodyExample: z.string().optional() })).max(MAX_OPERATIONS),
   authConfig: authSchema, mcpServerAuthConfig: mcpServerAuthSchema,
@@ -83,7 +85,8 @@ export function validateProjectSnapshot(input: unknown): ProjectSnapshotData {
     }
     const selected = data.tools.filter((tool) => tool.enabled);
     if (selected.length > 500) throw new Error("Select at most 500 tools per generated server.");
-    const spec = apiModelToParsedSpec(data.spec.apiModel);
+    const rebuilt = apiModelToParsedSpec(data.spec.apiModel);
+    const spec = data.spec.baseUrl?.trim() ? { ...rebuilt, baseUrl: data.spec.baseUrl.trim() } : rebuilt;
     buildGenerationPlan({ ...data, spec, tools: selected });
     return {
       ...data, spec,
