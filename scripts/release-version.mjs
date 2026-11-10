@@ -4,7 +4,7 @@
 //   2. pypi/pyproject.toml     version = "..."
 //   3. pypi/src/mcpmint/__init__.py  __version__ = "..."
 //
-// The PyPI wrapper executes `npx mcpmint@<__version__>`, so these MUST match —
+// The PyPI wrapper executes `npx @mcpmint/cli@<__version__>`, so these MUST match —
 // a drifted wrapper would silently run a different generator than it claims.
 //
 // Usage:

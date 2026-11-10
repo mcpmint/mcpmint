@@ -44,7 +44,7 @@ export default function OpengraphImage() {
           }}
         >
           <span style={{ color: ACID }}>~/mcpmint</span>
-          <span style={{ marginLeft: 16 }}>$ npx mcpmint build</span>
+          <span style={{ marginLeft: 16 }}>$ npx @mcpmint/cli generate api.yaml</span>
         </div>
 
         {/* Center: brand + tagline */}

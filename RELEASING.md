@@ -1,7 +1,7 @@
 # Releasing mcpmint
 
 The web app deploys continuously — every merge to `main` ships via Vercel.
-The **packages** (npm `mcpmint`, PyPI `mcpmint`) release only when a version
+The **packages** (npm `@mcpmint/cli`, PyPI `mcpmint`) release only when a version
 tag is pushed. CI does the publishing; no tokens live on any machine.
 
 ## Cutting a release
@@ -24,7 +24,7 @@ The `Release` workflow then runs, in order:
    blocks the release.
 2. **Version lockstep check** — the tag must equal the version in all four
    sites. This matters more here than in most repos: the PyPI wrapper executes
-   `npx mcpmint@<its own version>`, so a drifted wrapper would silently run a
+   `npx @mcpmint/cli@<its own version>`, so a drifted wrapper would silently run a
    different generator than it claims.
 3. **Publish npm + PyPI** (parallel) via OIDC Trusted Publishing.
 4. **GitHub release** with generated notes.
@@ -37,9 +37,11 @@ The `Release` workflow then runs, in order:
   first PyPI release can go through CI.
 - **npm**: trusted publishing can only be configured on an existing package,
   so the **first** npm publish is manual (`npm login`, then `npm publish` from
-  `cli/`). Immediately after, on npmjs.com → package `mcpmint` → Settings →
+  `cli/`). Immediately after, on npmjs.com → package `@mcpmint/cli` → Settings →
   configure the Trusted Publisher (repo `mcpmint/mcpmint`, workflow
-  `release.yml`) — after that, no npm token exists anywhere.
+  `release.yml`) — after that, no npm token exists anywhere. The workflow
+  treats an already-published npm version as a successful no-op so the manual
+  bootstrap version can still share its tag with the first PyPI release.
 
 ## Rules of thumb
 

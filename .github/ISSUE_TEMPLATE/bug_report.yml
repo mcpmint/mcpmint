@@ -27,7 +27,7 @@ body:
     id: surface
     attributes:
       label: Where
-      options: ["Web app (browser)", "CLI (npx mcpmint / pip mcpmint)"]
+      options: ["Web app (browser)", "CLI (npx @mcpmint/cli / pip mcpmint)"]
     validations:
       required: true
   - type: textarea
